@@ -47,6 +47,7 @@ STOCK_DATABASE = {
     "TIGER 미국AI전력SMR": "486340.KS",
     "RISE 미국AI테크액티브": "483210.KS",
     "SOL 미국AI전력인프라": "486350.KS",
+    "KODEX 미국AI광통신네트워크": "0173Y0.KS",
 
     # --- [반도체 / 빅테크 테마] ---
     "TIGER 미국필라델피아반도체나스닥": "381180.KS",
@@ -133,6 +134,11 @@ BACKFILL_MAP = {
     "489500.KS": "069500.KS", "489510.KS": "069500.KS", "102110.KS": "069500.KS",
     # AI 전력 / 인프라 -> XLU (미국 유틸리티 ETF) 또는 QQQ
     "486330.KS": "XLU", "486340.KS": "XLU", "483210.KS": "QQQ", "486350.KS": "XLU"
+    BACKFILL_MAP = {
+
+    # AI 광통신/네트워크 -> QQQ 백필 매핑 추가
+    "0173Y0.KS": "QQQ",
+}
 }
 
 ticker_to_label = {v: k for k, v in STOCK_DATABASE.items()}
