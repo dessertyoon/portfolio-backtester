@@ -56,3 +56,9 @@ uvicorn==0.52.0
 watchdog==6.0.0
 websockets==16.1.1
 yfinance==1.5.2
+streamlit
+yfinance
+pandas
+numpy
+plotly
+scipy
