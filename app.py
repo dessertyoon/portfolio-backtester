@@ -6,13 +6,12 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 
 # ---------------------------------------------------------
-# 1. 페이지 기본 설정 및 전체 종목 DB (기존 대표종목 + 실제 보유종목)
+# 1. 페이지 기본 설정 및 통합 종목 DB
 # ---------------------------------------------------------
-st.set_page_config(page_title="글로벌 & 연금저축 포트폴리오 백테스터", layout="wide")
-st.title("📊 포트폴리오 백테스터 (적립식 투자 & 리밸런싱)")
-st.caption("초기 투자금과 주기별 추가 납입금을 포함하여 과거 리밸런싱 성과를 시뮬레이션합니다.")
+st.set_page_config(page_title="연금저축 백테스터 & 리밸런싱 계산기", layout="wide")
+st.title("📊 연금저축 자산관리 통합 도구")
 
-# 한글 검색 데이터베이스 (보유 종목 + 기존 대표 종목)
+# 한글 검색 데이터베이스
 STOCK_DATABASE = {
     # --- [실제 보유 종목] ---
     "KIWOOM 미국S&P500모멘텀": "487950.KS",
@@ -64,193 +63,258 @@ STOCK_DATABASE = {
     "[미국주식] TSLA - 테슬라 (Tesla)": "TSLA"
 }
 
-# ---------------------------------------------------------
-# 2. 사이드바 - 사용자 입력창
-# ---------------------------------------------------------
-st.sidebar.header("⚙️ 포트폴리오 설정")
+# 탭 생성
+tab1, tab2 = st.tabs(["🚀 포트폴리오 백테스터", "⚖️ 현재 비중 계산 & 매매 리밸런싱"])
 
-# (1) 종목 검색 및 선택 (기본 선택: 실제 보유 종목 중 일부)
-selected_display_names = st.sidebar.multiselect(
-    "🔍 종목 검색 및 선택 (한글/영어)",
-    options=list(STOCK_DATABASE.keys()),
-    default=[
-        "KIWOOM 미국S&P500모멘텀",
-        "KODEX 미국나스닥100",
-        "KODEX 미국AI광통신네트워크",
-        "ACE 미국S&P500",
-        "TIGER 미국테크TOP10 INDXX"
-    ]
-)
-
-selected_tickers = [STOCK_DATABASE[name] for name in selected_display_names]
-
-manual_input = st.sidebar.text_input("➕ DB에 없는 티커 직접 추가 (예: SOXX, 005930.KS)")
-manual_tickers = [t.strip().upper() for t in manual_input.split(",") if t.strip()]
-
-all_tickers = list(dict.fromkeys(selected_tickers + manual_tickers))
-
-if not all_tickers:
-    st.sidebar.warning("최소 1개 이상의 종목을 선택해 주세요.")
-
-# (2) 종목별 비중 입력
-weights = []
-st.sidebar.subheader("⚖️ 종목별 비중 (%)")
-default_weight = round(100 / len(all_tickers), 1) if all_tickers else 0.0
-
-ticker_to_label = {v: k for k, v in STOCK_DATABASE.items()}
-
-for ticker in all_tickers:
-    label = ticker_to_label.get(ticker, ticker)
-    w = st.sidebar.number_input(
-        f"{label} 비중 (%)", 
-        min_value=0.0, 
-        max_value=100.0, 
-        value=default_weight, 
-        step=5.0,
-        key=f"weight_{ticker}"
+# =========================================================
+# TAB 1: 백테스트 시뮬레이션
+# =========================================================
+with tab1:
+    st.header("백테스트 시뮬레이션")
+    st.caption("선택한 종목과 비중을 바탕으로 과거 성과를 시뮬레이션합니다.")
+    
+    st.sidebar.header("⚙️ [백테스트] 설정")
+    selected_display_names = st.sidebar.multiselect(
+        "🔍 종목 선택 (한글/영어)",
+        options=list(STOCK_DATABASE.keys()),
+        default=[
+            "KIWOOM 미국S&P500모멘텀",
+            "KODEX 미국나스닥100",
+            "KODEX 미국AI광통신네트워크",
+            "ACE 미국S&P500",
+            "TIGER 미국테크TOP10 INDXX"
+        ]
     )
-    weights.append(w / 100.0)
 
-total_weight = sum(weights)
-if abs(total_weight - 1.0) > 0.001:
-    st.sidebar.error(f"⚠️ 비중의 합이 100%가 되어야 합니다. (현재: {total_weight*100:.1f}%)")
+    selected_tickers = [STOCK_DATABASE[name] for name in selected_display_names]
+    manual_input = st.sidebar.text_input("➕ 직접 티커 추가 (예: SOXX, 005930.KS)", key="bt_manual")
+    manual_tickers = [t.strip().upper() for t in manual_input.split(",") if t.strip()]
+    all_tickers = list(dict.fromkeys(selected_tickers + manual_tickers))
 
-# (3) 투자 금액 및 리밸런싱/추가 납입 조건
-st.sidebar.subheader("💵 투자 및 리밸런싱 옵션")
-initial_capital = st.sidebar.number_input("초기 투자금 (원/$)", value=10000000, step=1000000)
+    weights = []
+    st.sidebar.subheader("⚖️ 백테스트 목표 비중 (%)")
+    default_weight = round(100 / len(all_tickers), 1) if all_tickers else 0.0
 
-rebalance_freq = st.sidebar.selectbox(
-    "리밸런싱 주기", 
-    ["월간 (Monthly)", "분기 (Quarterly)", "연간 (Annually)", "리밸런싱 안함 (No Rebalance)"]
-)
+    ticker_to_label = {v: k for k, v in STOCK_DATABASE.items()}
 
-add_cash = st.sidebar.number_input(
-    "리밸런싱 회차당 추가 납입금 (원/$)", 
-    value=1000000, 
-    step=100000,
-    help="선택한 리밸런싱 주기마다 포트폴리오에 새로 투입되는 추가 투자금입니다."
-)
+    for ticker in all_tickers:
+        label = ticker_to_label.get(ticker, ticker)
+        w = st.sidebar.number_input(
+            f"{label} 비중 (%)", 
+            min_value=0.0, 
+            max_value=100.0, 
+            value=default_weight, 
+            step=5.0,
+            key=f"bt_weight_{ticker}"
+        )
+        weights.append(w / 100.0)
 
-years = st.sidebar.slider("백테스트 기간 (년)", min_value=1, max_value=10, value=3)
+    total_weight = sum(weights)
+    if abs(total_weight - 1.0) > 0.001 and all_tickers:
+        st.sidebar.error(f"⚠️ 비중 합계가 100%여야 합니다. (현재: {total_weight*100:.1f}%)")
 
-# ---------------------------------------------------------
-# 3. 백테스트 연산
-# ---------------------------------------------------------
-if st.sidebar.button("🚀 백테스트 실행", type="primary"):
-    if not all_tickers:
-        st.error("종목을 선택해 주세요.")
-    elif abs(total_weight - 1.0) > 0.001:
-        st.error("종목 비중의 합을 100%로 맞춘 후 다시 실행해 주세요.")
+    initial_capital = st.sidebar.number_input("초기 투자금 (원)", value=10000000, step=1000000, key="bt_init")
+    rebalance_freq = st.sidebar.selectbox("리밸런싱 주기", ["월간 (Monthly)", "분기 (Quarterly)", "연간 (Annually)", "리밸런싱 안함 (No Rebalance)"], key="bt_freq")
+    add_cash = st.sidebar.number_input("회차당 추가 납입금 (원)", value=1000000, step=100000, key="bt_add")
+    years = st.sidebar.slider("백테스트 기간 (년)", min_value=1, max_value=10, value=3, key="bt_years")
+
+    if st.sidebar.button("🚀 백테스트 실행", type="primary", key="bt_btn"):
+        if not all_tickers:
+            st.error("종목을 선택해 주세요.")
+        elif abs(total_weight - 1.0) > 0.001:
+            st.error("종목 비중의 합을 100%로 맞춰주세요.")
+        else:
+            with st.spinner("주가 데이터를 분석 중입니다..."):
+                end_date = datetime.today()
+                start_date = end_date - timedelta(days=int(years * 365.25))
+
+                raw_data = yf.download(all_tickers, start=start_date, end=end_date)['Close']
+                if isinstance(raw_data, pd.Series):
+                    raw_data = raw_data.to_frame(name=all_tickers[0])
+
+                data = raw_data.ffill().bfill().dropna()
+
+                if data.empty or len(data) < 10:
+                    st.error("데이터가 부족합니다. 백테스트 기간이나 종목을 변경해 주세요.")
+                else:
+                    daily_returns = data.pct_change().fillna(0)
+                    dates = data.index
+
+                    freq_map = {"월간 (Monthly)": "ME", "분기 (Quarterly)": "QE", "연간 (Annually)": "YE", "리밸런싱 안함 (No Rebalance)": None}
+                    code_freq = freq_map[rebalance_freq]
+
+                    portfolio_series = pd.Series(index=dates, dtype=float)
+                    total_invested_series = pd.Series(index=dates, dtype=float)
+
+                    rebalance_dates = set(data.resample(code_freq).first().index) if code_freq else set()
+
+                    asset_values = initial_capital * np.array(weights)
+                    current_invested = initial_capital
+
+                    for i in range(len(dates)):
+                        date = dates[i]
+                        if i > 0:
+                            ret = daily_returns.iloc[i].values
+                            asset_values = asset_values * (1 + ret)
+
+                        if date in rebalance_dates and i > 0:
+                            current_invested += add_cash
+                            total_val_with_cash = np.sum(asset_values) + add_cash
+                            asset_values = total_val_with_cash * np.array(weights)
+
+                        portfolio_series.iloc[i] = np.sum(asset_values)
+                        total_invested_series.iloc[i] = current_invested
+
+                    final_val = portfolio_series.iloc[-1]
+                    total_invested = total_invested_series.iloc[-1]
+                    total_profit = final_val - total_invested
+                    total_return = (total_profit / total_invested) * 100
+                    actual_years = (dates[-1] - dates[0]).days / 365.25
+                    peak = portfolio_series.cummax()
+                    drawdown = (portfolio_series - peak) / peak
+                    mdd = drawdown.min() * 100
+
+                    st.info(f"📅 백테스트 기간: **{dates[0].strftime('%Y-%m-%d')} ~ {dates[-1].strftime('%Y-%m-%d')}** (약 {actual_years:.1f}년)")
+
+                    col1, col2, col3, col4, col5 = st.columns(5)
+                    col1.metric("총 투입 원금", f"{total_invested:,.0f}원")
+                    col2.metric("최종 평가 금액", f"{final_val:,.0f}원")
+                    col3.metric("순수익금", f"{total_profit:+,.0f}원")
+                    col4.metric("수익률", f"{total_return:+.2f}%")
+                    col5.metric("MDD (최대 낙폭)", f"{mdd:.2f}%", delta_color="inverse")
+
+                    fig = go.Figure()
+                    fig.add_trace(go.Scatter(x=portfolio_series.index, y=portfolio_series.values, mode='lines', name='포트폴리오 평가금', line=dict(color='#1f77b4', width=2)))
+                    fig.add_trace(go.Scatter(x=total_invested_series.index, y=total_invested_series.values, mode='lines', name='누적 투입 원금', line=dict(color='#7f7f7f', width=2, dash='dash')))
+                    fig.update_layout(xaxis_title="날짜", yaxis_title="금액 (원)", hovermode="x unified", template="plotly_white")
+                    st.plotly_chart(fig, use_container_width=True)
+
+
+# =========================================================
+# TAB 2: 현재 비중 계산 & 매매 리밸런싱
+# =========================================================
+with tab2:
+    st.header("현재 비중 자동 계산 & 리밸런싱 주문 가이드")
+    st.caption("현재 보유 주식 수를 입력하면 현재 비중을 계산하고, 목표 비중에 맞추기 위한 필요 매수/매도 수량을 알려줍니다.")
+
+    reb_selected_names = st.multiselect(
+        "🔍 현재 보유 중이거나 리밸런싱에 포함할 종목 선택",
+        options=list(STOCK_DATABASE.keys()),
+        default=[
+            "KIWOOM 미국S&P500모멘텀",
+            "KODEX 미국나스닥100",
+            "KODEX 미국AI광통신네트워크",
+            "ACE 미국S&P500",
+            "TIGER 미국테크TOP10 INDXX",
+            "ACE 미국배당퀄리티",
+            "PLUS 고배당주"
+        ],
+        key="reb_select"
+    )
+
+    reb_tickers = [STOCK_DATABASE[name] for name in reb_selected_names]
+
+    if not reb_tickers:
+        st.warning("종목을 선택해 주세요.")
     else:
-        with st.spinner("과거 주가 데이터를 분석 중입니다..."):
-            end_date = datetime.today()
-            start_date = end_date - timedelta(days=int(years * 365.25))
+        # 추가 입금액 입력
+        extra_cash = st.number_input("💵 이번 리밸런싱 시 추가로 입금할 금액 (원)", value=1000000, step=100000, key="reb_extra_cash")
+        
+        st.subheader("1️⃣ 보유 수량 및 목표 비중 입력")
+        st.markdown("각 종목의 **현재 보유 주식 수(주)**와 **목표 비중(%)**을 입력해 주세요.")
 
-            raw_data = yf.download(all_tickers, start=start_date, end=end_date)['Close']
+        # 입력용 컬럼 설정
+        input_data = []
+        default_target_w = round(100.0 / len(reb_tickers), 1)
+
+        cols = st.columns([3, 2, 2])
+        cols[0].markdown("**종목명**")
+        cols[1].markdown("**현재 보유 주식 수 (주)**")
+        cols[2].markdown("**목표 비중 (%)**")
+
+        for idx, ticker in enumerate(reb_tickers):
+            label = ticker_to_label.get(ticker, ticker)
+            c1, c2, c3 = st.columns([3, 2, 2])
+            c1.write(f"**{label}**")
+            shares = c2.number_input(f"보유 수량 ({label})", min_value=0, value=10, step=1, label_visibility="collapsed", key=f"shares_{ticker}")
+            target_w = c3.number_input(f"목표 비중 ({label})", min_value=0.0, max_value=100.0, value=default_target_w, step=1.0, label_visibility="collapsed", key=f"target_w_{ticker}")
             
-            if isinstance(raw_data, pd.Series):
-                raw_data = raw_data.to_frame(name=all_tickers[0])
+            input_data.append({
+                "ticker": ticker,
+                "label": label,
+                "shares": shares,
+                "target_weight": target_w / 100.0
+            })
 
-            data = raw_data.ffill().bfill().dropna()
+        sum_target_w = sum(item["target_weight"] for item in input_data)
+        if abs(sum_target_w - 1.0) > 0.001:
+            st.error(f"⚠️ 목표 비중의 합이 100%가 되어야 합니다. (현재 합계: {sum_target_w*100:.1f}%)")
 
-            if data.empty or len(data) < 10:
-                st.error("데이터가 부족합니다. 신규 상장 종목이 포함되어 있다면 백테스트 기간을 줄이거나 종목을 변경해 주세요.")
+        if st.button("🧮 리밸런싱 계산하기", type="primary"):
+            if abs(sum_target_w - 1.0) > 0.001:
+                st.error("목표 비중의 합을 100%로 맞춘 후 계산 버튼을 눌러주세요.")
             else:
-                daily_returns = data.pct_change().fillna(0)
-                dates = data.index
-
-                freq_map = {
-                    "월간 (Monthly)": "ME",
-                    "분기 (Quarterly)": "QE",
-                    "연간 (Annually)": "YE",
-                    "리밸런싱 안함 (No Rebalance)": None
-                }
-                code_freq = freq_map[rebalance_freq]
-
-                portfolio_series = pd.Series(index=dates, dtype=float)
-                total_invested_series = pd.Series(index=dates, dtype=float)
-
-                rebalance_dates = set(data.resample(code_freq).first().index) if code_freq else set()
-
-                asset_values = initial_capital * np.array(weights)
-                current_invested = initial_capital
-
-                for i in range(len(dates)):
-                    date = dates[i]
+                with st.spinner("최신 주가 정보를 불러오는 중입니다..."):
+                    # 야후 파이낸스 최신 가격 조회
+                    price_data = yf.download(reb_tickers, period="5d")['Close']
                     
-                    if i > 0:
-                        ret = daily_returns.iloc[i].values
-                        asset_values = asset_values * (1 + ret)
+                    latest_prices = {}
+                    for ticker in reb_tickers:
+                        if isinstance(price_data, pd.DataFrame):
+                            latest_prices[ticker] = float(price_data[ticker].dropna().iloc[-1])
+                        else:
+                            latest_prices[ticker] = float(price_data.dropna().iloc[-1])
 
-                    if date in rebalance_dates and i > 0:
-                        current_invested += add_cash
-                        total_val_with_cash = np.sum(asset_values) + add_cash
-                        asset_values = total_val_with_cash * np.array(weights)
+                    # 리밸런싱 연산
+                    total_current_val = 0.0
+                    for item in input_data:
+                        t = item["ticker"]
+                        p = latest_prices[t]
+                        item["price"] = p
+                        item["current_val"] = item["shares"] * p
+                        total_current_val += item["current_val"]
 
-                    portfolio_series.iloc[i] = np.sum(asset_values)
-                    total_invested_series.iloc[i] = current_invested
+                    total_future_val = total_current_val + extra_cash
 
-                # ---------------------------------------------------------
-                # 4. 성과 지표 계산
-                # ---------------------------------------------------------
-                final_val = portfolio_series.iloc[-1]
-                total_invested = total_invested_series.iloc[-1]
-                total_profit = final_val - total_invested
-                total_return = (total_profit / total_invested) * 100
+                    results = []
+                    for item in input_data:
+                        t = item["ticker"]
+                        p = item["price"]
+                        cur_val = item["current_val"]
+                        cur_weight = (cur_val / total_current_val) if total_current_val > 0 else 0.0
+                        
+                        target_val = total_future_val * item["target_weight"]
+                        diff_val = target_val - cur_val
+                        diff_shares = int(round(diff_val / p)) if p > 0 else 0
 
-                actual_years = (dates[-1] - dates[0]).days / 365.25
-                cagr = (((final_val / total_invested) ** (1 / max(actual_years, 0.1))) - 1) * 100
+                        if diff_shares > 0:
+                            action = f"🟢 **매수 {diff_shares}주** (+{int(diff_val):,}원)"
+                        elif diff_shares < 0:
+                            action = f"🔴 **매도 {abs(diff_shares)}주** ({int(diff_val):,}원)"
+                        else:
+                            action = "⚪ **유지 (0주)**"
 
-                peak = portfolio_series.cummax()
-                drawdown = (portfolio_series - peak) / peak
-                mdd = drawdown.min() * 100
+                        results.append({
+                            "종목명": item["label"],
+                            "현재가": f"{int(p):,}원",
+                            "보유수량": f"{item['shares']}주",
+                            "현재 평가금액": f"{int(cur_val):,}원",
+                            "현재 비중": f"{cur_weight*100:.2f}%",
+                            "목표 비중": f"{item['target_weight']*100:.1f}%",
+                            "목표 평가금액": f"{int(target_val):,}원",
+                            "추천 매매 수량": action
+                        })
 
-                # ---------------------------------------------------------
-                # 5. UI 출력
-                # ---------------------------------------------------------
-                st.info(f"📅 실제 백테스트 기간: **{dates[0].strftime('%Y-%m-%d')} ~ {dates[-1].strftime('%Y-%m-%d')}** (약 {actual_years:.1f}년)")
+                    res_df = pd.DataFrame(results)
 
-                st.markdown("### 📌 성과 요약")
-                col1, col2, col3, col4, col5 = st.columns(5)
-                col1.metric("총 투입 원금", f"{total_invested:,.0f}")
-                col2.metric("최종 평가 금액", f"{final_val:,.0f}")
-                col3.metric("순수익금", f"{total_profit:+,.0f}")
-                col4.metric("원금 대비 수익률", f"{total_return:+.2f}%")
-                col5.metric("MDD (최대 낙폭)", f"{mdd:.2f}%", delta_color="inverse")
+                    st.markdown("---")
+                    st.subheader("2️⃣ 리밸런싱 결과 분석")
+                    
+                    col_a, col_b, col_c = st.columns(3)
+                    col_a.metric("현재 자산 총액", f"{int(total_current_val):,}원")
+                    col_b.metric("추가 입금 예정액", f"{int(extra_cash):,}원")
+                    col_c.metric("리밸런싱 후 목표 총 자산", f"{int(total_future_val):,}원")
 
-                st.markdown("### 📈 자산 성장 및 원금 추이")
-                fig = go.Figure()
-                fig.add_trace(go.Scatter(
-                    x=portfolio_series.index, 
-                    y=portfolio_series.values, 
-                    mode='lines', 
-                    name='포트폴리오 평가금',
-                    line=dict(color='#1f77b4', width=2)
-                ))
-                fig.add_trace(go.Scatter(
-                    x=total_invested_series.index, 
-                    y=total_invested_series.values, 
-                    mode='lines', 
-                    name='누적 투입 원금',
-                    line=dict(color='#7f7f7f', width=2, dash='dash')
-                ))
-                fig.update_layout(
-                    xaxis_title="날짜", 
-                    yaxis_title="금액", 
-                    hovermode="x unified", 
-                    template="plotly_white"
-                )
-                st.plotly_chart(fig, use_container_width=True)
-
-                st.markdown("### 📉 하락폭 (Drawdown)")
-                fig_dd = go.Figure()
-                fig_dd.add_trace(go.Scatter(
-                    x=drawdown.index, 
-                    y=drawdown.values * 100, 
-                    mode='lines', 
-                    name='Drawdown',
-                    fill='tozeroy',
-                    line=dict(color='#d62728', width=1)
-                ))
-                fig_dd.update_layout(xaxis_title="날짜", yaxis_title="낙폭 (%)", hovermode="x unified", template="plotly_white")
-                st.plotly_chart(fig_dd, use_container_width=True)
+                    st.markdown("### 📋 종목별 매매 주문 가이드")
+                    st.write("아래 안내된 수량만큼 증권사 앱에서 매수/매도 주문을 실행하시면 목표 비중에 맞춰집니다.")
+                    st.dataframe(res_df, use_container_width=True)
