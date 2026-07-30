@@ -132,6 +132,47 @@ BACKFILL_MAP = {
 
 ticker_to_label = {v: k for k, v in STOCK_DATABASE.items()}
 
+# ---------------------------------------------------------
+# ⭐ [NEW] 즐겨찾기(Favorites) 관리용 사이드바 UI 및 세션 처리
+# ---------------------------------------------------------
+if "favorites" not in st.session_state:
+    st.session_state["favorites"] = [
+        "KIWOOM 미국S&P500모멘텀",
+        "TIGER 미국나스닥100",
+        "ACE 미국S&P500",
+        "TIGER 미국테크TOP10 INDXX"
+    ]
+
+# 백테스트 및 리밸런싱 멀티셀렉트 기본 세션 state 초기화
+if "bt_select_key" not in st.session_state:
+    st.session_state["bt_select_key"] = st.session_state["favorites"].copy()
+
+if "reb_select_key" not in st.session_state:
+    st.session_state["reb_select_key"] = st.session_state["favorites"].copy()
+
+with st.sidebar:
+    st.markdown("---")
+    st.subheader("⭐ 즐겨찾기 (관심 종목)")
+    fav_selected = st.multiselect(
+        "자주 쓰는 종목 관리",
+        options=list(STOCK_DATABASE.keys()),
+        default=st.session_state["favorites"],
+        key="fav_multiselect"
+    )
+    st.session_state["favorites"] = fav_selected
+
+    col_fav1, col_fav2 = st.columns(2)
+    with col_fav1:
+        if st.button("백테스트에 적용", key="apply_fav_bt"):
+            st.session_state["bt_select_key"] = st.session_state["favorites"].copy()
+            st.rerun()
+    with col_fav2:
+        if st.button("리밸런싱에 적용", key="apply_fav_reb"):
+            st.session_state["reb_select_key"] = st.session_state["favorites"].copy()
+            st.rerun()
+    st.markdown("---")
+
+
 # 단일 종목 최신가 안전 조회 함수
 @st.cache_data(ttl=300)
 def get_single_latest_price(ticker):
@@ -254,15 +295,13 @@ with tab1:
     st.caption("미래에셋 연금계좌 주요 ETF 및 선택한 종목의 과거 수익률과 CAGR(연평균 수익률)을 분석합니다.")
     
     st.sidebar.header("⚙️ [백테스트] 설정")
+    
+    # ⭐ 즐겨찾기 연동 세션 state 적용
     selected_display_names = st.sidebar.multiselect(
         "🔍 종목 선택 (한글/영어)",
         options=list(STOCK_DATABASE.keys()),
-        default=[
-            "KIWOOM 미국S&P500모멘텀",
-            "TIGER 미국나스닥100",
-            "ACE 미국S&P500",
-            "TIGER 미국테크TOP10 INDXX"
-        ]
+        default=st.session_state["bt_select_key"],
+        key="bt_multiselect"
     )
 
     selected_tickers = [STOCK_DATABASE[name] for name in selected_display_names]
@@ -456,19 +495,13 @@ with tab2:
 
     with col_left:
         st.subheader("1️⃣ 포트폴리오 종목 및 보유 현황 입력")
+        
+        # ⭐ 즐겨찾기 연동 세션 state 적용
         reb_selected_names = st.multiselect(
             "리밸런싱 대상 종목 선택",
             options=list(STOCK_DATABASE.keys()),
-            default=[
-                "KIWOOM 미국S&P500모멘텀",
-                "TIGER 미국나스닥100",
-                "ACE 미국S&P500",
-                "TIGER 미국테크TOP10 INDXX",
-                "KODEX 미국AI광통신네트워크",
-                "PLUS 고배당주",
-                "ACE 미국배당퀄리티"
-            ],
-            key="reb_select"
+            default=st.session_state["reb_select_key"],
+            key="reb_multiselect"
         )
         
         reb_selected_tickers = [STOCK_DATABASE[name] for name in reb_selected_names]
