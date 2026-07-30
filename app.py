@@ -283,33 +283,17 @@ with tab1:
             with st.spinner("주가 데이터 수집 및 대체 지수 백필 처리 중..."):
                 end_date = datetime.today()
                 start_date = end_date - timedelta(days=int(years * 365.25))
-                # (백테스트 실행 부분 중 일부)
-data, backfill_info = fetch_and_backfill_data(all_tickers, start_date, end_date)
 
-if data.empty or len(data) < 10:
-    st.error("데이터가 부족합니다. 백테스트 기간이나 종목을 변경해 주세요.")
-else:
-    # 🔥 [추가] 선택한 종목(all_tickers)과 컬럼 순서 및 개수를 정확히 일치시킴
-    data = data[all_tickers]
-    
-    # 백필 정보 안내
-    if backfill_info:
-        with st.expander("💡 **신규 상장 ETF 자동 백필(Backfill) 적용 안내**", expanded=True):
-            st.write("선택한 ETF 중 백테스트 기간 내 상장된 신생 ETF는 상장 이전 기간 동안 연관 대표지수/대체 ETF 수익률을 활용해 자동 복원 처리되었습니다.")
-            for info in backfill_info:
-                st.markdown(f"- {info}")
-
-    daily_returns = data.pct_change().fillna(0)
-    dates = data.index
-    # ... (이후 기존 백테스트 계산 루프 동일)
-
-                # 백필 지원 수집 함수 활용
+                # 데이터 수집 및 백필 실행 (들여쓰기 위치 확인)
                 data, backfill_info = fetch_and_backfill_data(all_tickers, start_date, end_date)
 
                 if data.empty or len(data) < 10:
                     st.error("데이터가 부족합니다. 백테스트 기간이나 종목을 변경해 주세요.")
                 else:
-                    # 백필 정보가 있는 경우 안내 메시지 표시
+                    # 선택한 종목과 컬럼 순서 및 개수를 강제로 일치
+                    data = data[all_tickers]
+
+                    # 백필 정보 안내
                     if backfill_info:
                         with st.expander("💡 **신규 상장 ETF 자동 백필(Backfill) 적용 안내**", expanded=True):
                             st.write("선택한 ETF 중 백테스트 기간 내 상장된 신생 ETF는 상장 이전 기간 동안 연관 대표지수/대체 ETF 수익률을 활용해 자동 복원 처리되었습니다.")
@@ -351,7 +335,6 @@ else:
                     
                     actual_years = (dates[-1] - dates[0]).days / 365.25
                     
-                    # 🔥 [연간 수익률 (CAGR) 산출]
                     if actual_years > 0 and total_invested > 0:
                         cagr = (((final_val / total_invested) ** (1.0 / actual_years)) - 1.0) * 100
                     else:
@@ -363,7 +346,22 @@ else:
 
                     st.info(f"📅 백테스트 실행 기간: **{dates[0].strftime('%Y-%m-%d')} ~ {dates[-1].strftime('%Y-%m-%d')}** (약 {actual_years:.1f}년)")
 
-                    # 6개 요약 지표 출력
+                    # ---------------------------------------------------------
+                    # Metric 폰트 크기 자동 축소 & 짤림 방지 CSS 적용
+                    # ---------------------------------------------------------
+                    st.markdown("""
+                    <style>
+                    [data-testid="stMetricValue"] {
+                        font-size: 1.35rem !important;
+                        font-weight: 700;
+                        white-space: nowrap;
+                    }
+                    [data-testid="stMetricLabel"] {
+                        font-size: 0.85rem !important;
+                    }
+                    </style>
+                    """, unsafe_allow_html=True)
+
                     col1, col2, col3, col4, col5, col6 = st.columns(6)
                     col1.metric("총 투입 원금", f"{total_invested:,.0f}원")
                     col2.metric("최종 평가 금액", f"{final_val:,.0f}원")
@@ -377,130 +375,3 @@ else:
                     fig.add_trace(go.Scatter(x=total_invested_series.index, y=total_invested_series.values, mode='lines', name='누적 투입 원금', line=dict(color='#7f7f7f', width=2, dash='dash')))
                     fig.update_layout(xaxis_title="날짜", yaxis_title="금액 (원)", hovermode="x unified", template="plotly_white")
                     st.plotly_chart(fig, use_container_width=True)
-
-
-# =========================================================
-# TAB 2: 현재 비중 계산 & 매매 리밸런싱
-# =========================================================
-with tab2:
-    st.header("현재 비중 자동 계산 & 리밸런싱 주문 가이드")
-    st.caption("보유 수량을 입력하면 실시간 주가 기준 현재 비중을 자동 계산하고, 목표 비중 맞춤용 매수/매도 수량을 안내합니다.")
-
-    reb_selected_names = st.multiselect(
-        "🔍 현재 보유 중이거나 리밸런싱에 포함할 종목 선택",
-        options=list(STOCK_DATABASE.keys()),
-        default=[
-            "TIGER 미국배당다우존스 [SCHD]",
-            "PLUS 고배당주"
-        ],
-        key="reb_select"
-    )
-
-    reb_tickers = [STOCK_DATABASE[name] for name in reb_selected_names]
-
-    if not reb_tickers:
-        st.warning("종목을 선택해 주세요.")
-    else:
-        extra_cash = st.number_input("💵 이번 리밸런싱 시 추가로 입금할 금액 (원)", value=1000000, step=100000, key="reb_extra_cash")
-        
-        st.subheader("1️⃣ 보유 수량 및 목표 비중 입력")
-
-        # 실시간 가격 수집
-        prices = {ticker: get_latest_price(ticker) for ticker in reb_tickers}
-
-        # 현재 평가금액 총합 계산
-        temp_shares = {}
-        total_current_val = 0.0
-        for ticker in reb_tickers:
-            s_val = st.session_state.get(f"shares_{ticker}", 10)
-            temp_shares[ticker] = s_val
-            total_current_val += s_val * prices[ticker]
-
-        # 레이아웃 헤더 (5컬럼: 종목명 | 보유 수량 | 현재가 | 현재 비중 | 목표 비중)
-        cols = st.columns([3, 2, 2, 2, 2])
-        cols[0].markdown("**종목명**")
-        cols[1].markdown("**현재 보유 수량 (주)**")
-        cols[2].markdown("**현재가 (원)**")
-        cols[3].markdown("**현재 비중 (%)**")
-        cols[4].markdown("**목표 비중 (%)**")
-
-        input_data = []
-        default_target_w = round(100.0 / len(reb_tickers), 1)
-
-        for idx, ticker in enumerate(reb_tickers):
-            label = ticker_to_label.get(ticker, ticker)
-            p = prices[ticker]
-            
-            c1, c2, c3, c4, c5 = st.columns([3, 2, 2, 2, 2])
-            c1.write(f"**{label}**")
-            
-            shares = c2.number_input(f"보유 수량 ({label})", min_value=0, value=10, step=1, label_visibility="collapsed", key=f"shares_{ticker}")
-            
-            cur_val = shares * p
-            cur_weight_pct = (cur_val / total_current_val * 100.0) if total_current_val > 0 else 0.0
-            
-            c3.write(f"{int(p):,}원" if p > 0 else "조회불가")
-            c4.markdown(f"**{cur_weight_pct:.2f}%**")
-            
-            target_w = c5.number_input(f"목표 비중 ({label})", min_value=0.0, max_value=100.0, value=default_target_w, step=1.0, label_visibility="collapsed", key=f"target_w_{ticker}")
-            
-            input_data.append({
-                "ticker": ticker,
-                "label": label,
-                "shares": shares,
-                "price": p,
-                "current_val": cur_val,
-                "target_weight": target_w / 100.0
-            })
-
-        sum_target_w = sum(item["target_weight"] for item in input_data)
-        if abs(sum_target_w - 1.0) > 0.001:
-            st.error(f"⚠️ 목표 비중의 합이 100%가 되어야 합니다. (현재 합계: {sum_target_w*100:.1f}%)")
-
-        if st.button("🧮 리밸런싱 주문 가이드 계산하기", type="primary"):
-            if abs(sum_target_w - 1.0) > 0.001:
-                st.error("목표 비중의 합을 100%로 맞춘 후 계산 버튼을 눌러주세요.")
-            else:
-                total_future_val = total_current_val + extra_cash
-
-                results = []
-                for item in input_data:
-                    p = item["price"]
-                    cur_val = item["current_val"]
-                    cur_weight = (cur_val / total_current_val) if total_current_val > 0 else 0.0
-                    
-                    target_val = total_future_val * item["target_weight"]
-                    diff_val = target_val - cur_val
-                    diff_shares = int(round(diff_val / p)) if p > 0 else 0
-
-                    if diff_shares > 0:
-                        action = f"🟢 **매수 {diff_shares}주** (+{int(diff_val):,}원)"
-                    elif diff_shares < 0:
-                        action = f"🔴 **매도 {abs(diff_shares)}주** ({int(diff_val):,}원)"
-                    else:
-                        action = "⚪ **유지 (0주)**"
-
-                    results.append({
-                        "종목명": item["label"],
-                        "현재가": f"{int(p):,}원" if p > 0 else "조회 실패",
-                        "보유수량": f"{item['shares']}주",
-                        "현재 평가금액": f"{int(cur_val):,}원",
-                        "현재 비중": f"{cur_weight*100:.2f}%",
-                        "목표 비중": f"{item['target_weight']*100:.1f}%",
-                        "목표 평가금액": f"{int(target_val):,}원",
-                        "추천 매매 수량": action
-                    })
-
-                res_df = pd.DataFrame(results)
-
-                st.markdown("---")
-                st.subheader("2️⃣ 리밸런싱 결과 분석")
-                
-                col_a, col_b, col_c = st.columns(3)
-                col_a.metric("현재 자산 총액", f"{int(total_current_val):,}원")
-                col_b.metric("추가 입금 예정액", f"{int(extra_cash):,}원")
-                col_c.metric("리밸런싱 후 목표 총 자산", f"{int(total_future_val):,}원")
-
-                st.markdown("### 📋 종목별 매매 주문 가이드")
-                st.write("아래 안내된 수량만큼 증권사 앱에서 매수/매도 주문을 실행하시면 목표 비중에 맞춰집니다.")
-                st.dataframe(res_df, use_container_width=True)
