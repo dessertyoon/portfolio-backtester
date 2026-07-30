@@ -261,18 +261,43 @@ with tab1:
     initial_capital = st.sidebar.number_input("초기 투자금 (원)", value=10000000, step=1000000, key="bt_init")
     rebalance_freq = st.sidebar.selectbox("리밸런싱 주기", ["월간 (Monthly)", "분기 (Quarterly)", "연간 (Annually)", "리밸런싱 안함 (No Rebalance)"], key="bt_freq")
     add_cash = st.sidebar.number_input("회차당 추가 납입금 (원)", value=1000000, step=100000, key="bt_add")
-    years = st.sidebar.slider("백테스트 기간 (년)", min_value=1, max_value=10, value=3, key="bt_years")
+
+    # --- 백테스팅 기간 설정 (월 단위 및 최대 30년 지원) ---
+    st.sidebar.subheader("📅 백테스트 기간 설정 (월 단위)")
+    
+    current_year = datetime.today().year
+    current_month = datetime.today().month
+    years_list = list(range(1995, current_year + 1))
+    months_list = list(range(1, 13))
+
+    col_s1, col_s2 = st.sidebar.columns(2)
+    with col_s1:
+        start_year = st.selectbox("시작 연도", options=years_list, index=years_list.index(max(1995, current_year - 5)), key="bt_sy")
+    with col_s2:
+        start_month = st.selectbox("시작 월", options=months_list, index=0, key="bt_sm")
+
+    col_e1, col_e2 = st.sidebar.columns(2)
+    with col_e1:
+        end_year = st.selectbox("종료 연도", options=years_list, index=years_list.index(current_year), key="bt_ey")
+    with col_e2:
+        end_month = st.selectbox("종료 월", options=months_list, index=current_month - 1, key="bt_em")
+
+    start_date = datetime(start_year, start_month, 1)
+    # 종료일은 해당 월의 마지막 날로 설정
+    if end_month == 12:
+        end_date = datetime(end_year, 12, 31)
+    else:
+        end_date = datetime(end_year, end_month + 1, 1) - timedelta(days=1)
 
     if st.sidebar.button("🚀 백테스트 실행", type="primary", key="bt_btn"):
         if not all_tickers:
             st.error("종목을 선택해 주세요.")
         elif abs(total_weight - 1.0) > 0.001:
             st.error("종목 비중의 합을 100%로 맞춰주세요.")
+        elif start_date >= end_date:
+            st.error("시작 날짜가 종료 날짜보다 앞서야 합니다.")
         else:
             with st.spinner("주가 데이터 수집 및 대체 지수 백필 처리 중..."):
-                end_date = datetime.today()
-                start_date = end_date - timedelta(days=int(years * 365.25))
-
                 data, backfill_info = fetch_and_backfill_data(all_tickers, start_date, end_date)
 
                 if data.empty or len(data) < 10:
@@ -409,7 +434,6 @@ with tab2:
             temp_eval_total = 0.0
             for ticker in reb_all_tickers:
                 fetched_p = fetched_price_map.get(ticker, 0.0)
-                # 수동 주가 입력값이 세션에 있으면 우선 사용
                 user_p = st.session_state.get(f"reb_price_{ticker}", float(fetched_p))
                 curr_qty = st.session_state.get(f"reb_qty_{ticker}", 0)
                 temp_eval_total += (curr_qty * user_p)
@@ -443,7 +467,6 @@ with tab2:
                     reb_holdings[ticker] = qty
 
                 with c2:
-                    # 주가가 0원이면 사용자가 직접 입력 가능하도록 필드 제공
                     p_input = st.number_input(
                         "현재 주가(원)", 
                         min_value=0.0, 
