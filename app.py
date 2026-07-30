@@ -134,10 +134,8 @@ BACKFILL_MAP = {
     "489500.KS": "069500.KS", "489510.KS": "069500.KS", "102110.KS": "069500.KS",
     # AI 전력 / 인프라 -> XLU (미국 유틸리티 ETF) 또는 QQQ
     "486330.KS": "XLU", "486340.KS": "XLU", "483210.KS": "QQQ", "486350.KS": "XLU",
-
-    # AI 광통신/네트워크 -> QQQ 백필 매핑 추가
+    # AI 광통신/네트워크 -> QQQ
     "0173Y0.KS": "QQQ",
-
 }
 
 ticker_to_label = {v: k for k, v in STOCK_DATABASE.items()}
@@ -284,7 +282,7 @@ with tab1:
                 end_date = datetime.today()
                 start_date = end_date - timedelta(days=int(years * 365.25))
 
-                # 데이터 수집 및 백필 실행 (들여쓰기 위치 확인)
+                # 데이터 수집 및 백필 실행
                 data, backfill_info = fetch_and_backfill_data(all_tickers, start_date, end_date)
 
                 if data.empty or len(data) < 10:
@@ -346,9 +344,7 @@ with tab1:
 
                     st.info(f"📅 백테스트 실행 기간: **{dates[0].strftime('%Y-%m-%d')} ~ {dates[-1].strftime('%Y-%m-%d')}** (약 {actual_years:.1f}년)")
 
-                    # ---------------------------------------------------------
                     # Metric 폰트 크기 자동 축소 & 짤림 방지 CSS 적용
-                    # ---------------------------------------------------------
                     st.markdown("""
                     <style>
                     [data-testid="stMetricValue"] {
@@ -375,3 +371,133 @@ with tab1:
                     fig.add_trace(go.Scatter(x=total_invested_series.index, y=total_invested_series.values, mode='lines', name='누적 투입 원금', line=dict(color='#7f7f7f', width=2, dash='dash')))
                     fig.update_layout(xaxis_title="날짜", yaxis_title="금액 (원)", hovermode="x unified", template="plotly_white")
                     st.plotly_chart(fig, use_container_width=True)
+
+
+# =========================================================
+# TAB 2: 현재 비중 계산 & 매매 리밸런싱
+# =========================================================
+with tab2:
+    st.header("현재 비중 계산 & 매매 리밸런싱")
+    st.caption("현재 보유 중인 수량과 예수금, 목표 비중을 입력하면 최신 주가를 반영하여 매수/매도해야 할 정확한 수량을 계산해 줍니다.")
+
+    col_left, col_right = st.columns([1, 1])
+
+    with col_left:
+        st.subheader("1️⃣ 포트폴리오 종목 및 보유 현황 입력")
+        reb_selected_names = st.multiselect(
+            "리밸런싱 대상 종목 선택",
+            options=list(STOCK_DATABASE.keys()),
+            default=[
+                "KIWOOM 미국S&P500모멘텀",
+                "TIGER 미국나스닥100",
+                "ACE 미국S&P500",
+                "TIGER 미국테크TOP10 INDXX"
+            ],
+            key="reb_select"
+        )
+        
+        reb_selected_tickers = [STOCK_DATABASE[name] for name in reb_selected_names]
+        reb_manual_input = st.text_input("➕ 직접 티커 추가 (예: SOXX, 005930.KS)", key="reb_manual")
+        reb_manual_tickers = [t.strip().upper() for t in reb_manual_input.split(",") if t.strip()]
+        reb_all_tickers = list(dict.fromkeys(reb_selected_tickers + reb_manual_tickers))
+
+        reb_cash = st.number_input("현재 보유 예수금 / 추가 입금액 (원)", value=1000000, step=100000, key="reb_cash")
+
+    reb_holdings = {}
+    reb_target_weights = {}
+
+    if reb_all_tickers:
+        with col_right:
+            st.subheader("2️⃣ 보유 수량 및 목표 비중 설정")
+            def_reb_w = round(100.0 / len(reb_all_tickers), 1)
+
+            for ticker in reb_all_tickers:
+                label = ticker_to_label.get(ticker, ticker)
+                c1, c2 = st.columns(2)
+                with c1:
+                    qty = st.number_input(f"{label} 보유수량 (주)", min_value=0, value=0, step=1, key=f"reb_qty_{ticker}")
+                    reb_holdings[ticker] = qty
+                with c2:
+                    tw = st.number_input(f"{label} 목표 비중 (%)", min_value=0.0, max_value=100.0, value=def_reb_w, step=5.0, key=f"reb_tw_{ticker}")
+                    reb_target_weights[ticker] = tw / 100.0
+
+        reb_total_w = sum(reb_target_weights.values())
+        if abs(reb_total_w - 1.0) > 0.001:
+            st.error(f"⚠️ 목표 비중의 합계가 100%여야 합니다. (현재 합계: {reb_total_w*100:.1f}%)")
+
+        if st.button("⚖️ 리밸런싱 매매 수량 계산하기", type="primary", key="calc_reb_btn"):
+            if abs(reb_total_w - 1.0) > 0.001:
+                st.error("목표 비중 합계를 100%로 맞춘 후 계산 버튼을 눌러주세요.")
+            else:
+                with st.spinner("최신 주가 수집 및 리밸런싱 주문 수량 계산 중..."):
+                    results = []
+                    total_eval_asset = 0.0
+
+                    # 1. 최신 주가 및 평가금액 수집
+                    for ticker in reb_all_tickers:
+                        price = get_latest_price(ticker)
+                        qty = reb_holdings[ticker]
+                        eval_amt = price * qty
+                        total_eval_asset += eval_amt
+                        
+                        results.append({
+                            "ticker": ticker,
+                            "label": ticker_to_label.get(ticker, ticker),
+                            "price": price,
+                            "qty": qty,
+                            "eval_amt": eval_amt,
+                            "target_weight": reb_target_weights[ticker]
+                        })
+
+                    total_portfolio_val = total_eval_asset + reb_cash
+
+                    if total_portfolio_val <= 0:
+                        st.warning("총 포트폴리오 자산(평가금 + 예수금)이 0원입니다.")
+                    else:
+                        # 2. 리밸런싱 매매 계산
+                        df_reb = pd.DataFrame(results)
+                        df_reb["current_weight"] = (df_reb["eval_amt"] / total_portfolio_val) * 100
+                        df_reb["target_amt"] = total_portfolio_val * df_reb["target_weight"]
+                        df_reb["diff_amt"] = df_reb["target_amt"] - df_reb["eval_amt"]
+                        
+                        # 매수/매도 수량 계산 (주가 0원 예외 처리)
+                        df_reb["trade_qty"] = df_reb.apply(
+                            lambda r: int(r["diff_amt"] // r["price"]) if r["price"] > 0 else 0, axis=1
+                        )
+                        df_reb["trade_amt"] = df_reb["trade_qty"] * df_reb["price"]
+
+                        # 요약 지표 출력
+                        m1, m2, m3 = st.columns(3)
+                        m1.metric("현재 총 주식 평가금", f"{total_eval_asset:,.0f}원")
+                        m2.metric("보유 예수금 / 추가금", f"{reb_cash:,.0f}원")
+                        m3.metric("리밸런싱 총 자산", f"{total_portfolio_val:,.0f}원")
+
+                        st.subheader("📋 리밸런싱 주문 가이드")
+
+                        display_df = pd.DataFrame({
+                            "종목명": df_reb["label"],
+                            "현재 주가": df_reb["price"].apply(lambda x: f"{x:,.0f}원"),
+                            "보유 수량": df_reb["qty"].apply(lambda x: f"{x:,}주"),
+                            "현재 비중": df_reb["current_weight"].apply(lambda x: f"{x:.1f}%"),
+                            "목표 비중": (df_reb["target_weight"] * 100).apply(lambda x: f"{x:.1f}%"),
+                            "목표 평가금": df_reb["target_amt"].apply(lambda x: f"{x:,.0f}원"),
+                            "주문 필요 수량": df_reb["trade_qty"].apply(lambda x: f"{x:+d}주" if x != 0 else "유지"),
+                            "예상 주문 금액": df_reb["trade_amt"].apply(lambda x: f"{x:+,.0f}원")
+                        })
+
+                        st.dataframe(display_df, use_container_width=True)
+
+                        # 매매 가이드 텍스트 안내
+                        st.markdown("#### 💡 **주문 실행 가이드**")
+                        for idx, row in df_reb.iterrows():
+                            qty = row["trade_qty"]
+                            label = row["label"]
+                            price = row["price"]
+                            amt = abs(row["trade_amt"])
+
+                            if qty > 0:
+                                st.success(f"🟢 **{label}**: **{qty}주 매수** (약 {amt:,.0f}원 / 현재가: {price:,.0f}원)")
+                            elif qty < 0:
+                                st.error(f"🔴 **{label}**: **{abs(qty)}주 매도** (약 {amt:,.0f}원 / 현재가: {price:,.0f}원)")
+                            else:
+                                st.info(f"⚪ **{label}**: **수량 유지** (현재 목표 비중과 일치)")
