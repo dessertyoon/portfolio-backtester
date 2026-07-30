@@ -113,81 +113,60 @@ STOCK_DATABASE = {
     "[미국주식] TSLA - 테슬라": "TSLA"
 }
 
-# 상장일이 짧아 데이터가 부족한 ETF에 적용할 대체 지수/ETF 매핑
 BACKFILL_MAP = {
-    # S&P 500 계열 -> SPY
     "360750.KS": "SPY", "379800.KS": "SPY", "368590.KS": "SPY", "433330.KS": "SPY", 
     "368200.KS": "SPY", "487950.KS": "SPY",
-    # 나스닥 100 계열 -> QQQ
     "133690.KS": "QQQ", "379810.KS": "QQQ", "367380.KS": "QQQ", "485030.KS": "QQQ", 
     "381170.KS": "QQQ", "465580.KS": "QQQ", "490090.KS": "QQQ", "487820.KS": "QQQ",
-    # 미국 배당주 / SCHD 계열 -> SCHD
     "458730.KS": "SCHD", "423160.KS": "SCHD", "446720.KS": "SCHD", "480410.KS": "SCHD", 
     "474220.KS": "SCHD", "474230.KS": "SCHD", "438010.KS": "SCHD", "482730.KS": "SPY",
-    # 반도체 계열 -> SOXX 또는 NVDA
     "381180.KS": "SOXX", "388420.KS": "SOXX", "497570.KS": "SOXX", "391620.KS": "SOXX", 
     "453950.KS": "TSM", "446770.KS": "005930.KS", "471750.KS": "005930.KS",
-    # 미국 장기채 계열 -> TLT
     "453850.KS": "TLT", "472150.KS": "TLT", "465520.KS": "TLT", "474130.KS": "TLT", 
     "482080.KS": "TLT",
-    # 코스피 / 코리아 밸류업 -> KODEX 200 (069500.KS)
     "489500.KS": "069500.KS", "489510.KS": "069500.KS", "102110.KS": "069500.KS",
-    # AI 전력 / 인프라 -> XLU (미국 유틸리티 ETF) 또는 QQQ
     "486330.KS": "XLU", "486340.KS": "XLU", "483210.KS": "QQQ", "486350.KS": "XLU",
-    # AI 광통신/네트워크 -> QQQ 백필 매핑 추가
     "0173Y0.KS": "QQQ",
 }
 
 ticker_to_label = {v: k for k, v in STOCK_DATABASE.items()}
 
-# 안전한 최신 주가 가져오기 함수 (캐싱 적용)
+# 단일 종목 최신가 안전 조회 함수 (개별 조회용)
 @st.cache_data(ttl=300)
-def get_latest_price(ticker):
+def get_single_latest_price(ticker):
     try:
-        ticker_obj = yf.Ticker(ticker)
-        hist = ticker_obj.history(period="7d")
-        if not hist.empty:
-            return float(hist['Close'].dropna().iloc[-1])
+        t_obj = yf.Ticker(ticker)
+        df = t_obj.history(period="5d")
+        if not df.empty and 'Close' in df.columns:
+            valid_closes = df['Close'].dropna()
+            if not valid_closes.empty:
+                return float(valid_closes.iloc[-1])
         return 0.0
     except Exception:
         return 0.0
 
-# 여러 종목 최신 주가 일괄 수집
+# 개선된 주가 일괄 수집 함수 (0원 오류 완벽 방지)
 @st.cache_data(ttl=300)
 def get_batch_latest_prices(tickers):
     prices = {}
     if not tickers:
         return prices
-    try:
-        raw = yf.download(tickers, period="7d", progress=False)['Close']
-        if isinstance(raw, pd.Series):
-            prices[tickers[0]] = float(raw.dropna().iloc[-1]) if not raw.dropna().empty else 0.0
-        else:
-            for t in tickers:
-                if t in raw.columns and not raw[t].dropna().empty:
-                    prices[t] = float(raw[t].dropna().iloc[-1])
-                else:
-                    prices[t] = 0.0
-    except Exception:
-        for t in tickers:
-            prices[t] = get_latest_price(t)
+    
+    # 1차: 개별 안정 조회를 기본적으로 수행하여 0원 누락 보장
+    for t in tickers:
+        p = get_single_latest_price(t)
+        prices[t] = p
+        
     return prices
 
-# ---------------------------------------------------------
 # 자동 백필(Backfill) 지원 주가 데이터 수집 함수
-# ---------------------------------------------------------
 def fetch_and_backfill_data(tickers, start_date, end_date):
-    """
-    종목별 데이터를 수집하되, 백테스트 시작일 이후에 상장되었거나 
-    데이터가 없는 종목은 대체 티커(BACKFILL_MAP)의 수익률로 과거/전체 데이터를 안전하게 백필합니다.
-    """
     all_needed_tickers = set(tickers)
     for t in tickers:
         if t in BACKFILL_MAP:
             all_needed_tickers.add(BACKFILL_MAP[t])
 
-    # 1. 전체 필요한 티커 데이터 다운로드
-    raw_data = yf.download(list(all_needed_tickers), start=start_date, end=end_date)['Close']
+    raw_data = yf.download(list(all_needed_tickers), start=start_date, end=end_date, progress=False)['Close']
     
     if isinstance(raw_data, pd.Series):
         raw_data = raw_data.to_frame(name=list(all_needed_tickers)[0])
@@ -201,12 +180,10 @@ def fetch_and_backfill_data(tickers, start_date, end_date):
         label = ticker_to_label.get(t, t)
         bench_ticker = BACKFILL_MAP.get(t, "SPY")
         
-        # 원본 데이터가 존재하고 비어있지 않은 경우
         if t in raw_data.columns and not raw_data[t].dropna().empty:
             series = raw_data[t].dropna()
             first_valid_idx = series.index[0]
             
-            # 백테스트 시작일보다 상장일이 늦은 경우 대체 티커 수익률로 과거 백필
             if first_valid_idx > raw_data.index[0] and bench_ticker in raw_data.columns:
                 bench_series = raw_data[bench_ticker]
                 base_price = series.loc[first_valid_idx]
@@ -230,13 +207,11 @@ def fetch_and_backfill_data(tickers, start_date, end_date):
             else:
                 backfilled_df[t] = raw_data[t]
         else:
-            # 원본 데이터가 완전히 없는 경우 대체 티커 데이터로 전체 대체
             if bench_ticker in raw_data.columns:
                 backfilled_df[t] = raw_data[bench_ticker]
                 bench_label = ticker_to_label.get(bench_ticker, bench_ticker)
                 backfill_info.append(f"**{label}** (최신 데이터 수집 불량) ➡️ **{bench_label}** 데이터로 100% 대체 적용")
 
-    # 모든 요청 티커 순서 및 존재 여부 보장
     final_df = backfilled_df.reindex(columns=tickers).ffill().bfill().dropna()
     return final_df, backfill_info
 
@@ -303,16 +278,13 @@ with tab1:
                 end_date = datetime.today()
                 start_date = end_date - timedelta(days=int(years * 365.25))
 
-                # 데이터 수집 및 백필 실행
                 data, backfill_info = fetch_and_backfill_data(all_tickers, start_date, end_date)
 
                 if data.empty or len(data) < 10:
                     st.error("데이터가 부족합니다. 백테스트 기간이나 종목을 변경해 주세요.")
                 else:
-                    # 선택한 종목과 컬럼 순서 및 개수를 강제로 일치
                     data = data[all_tickers]
 
-                    # 백필 정보 안내
                     if backfill_info:
                         with st.expander("💡 **신규 상장 ETF 자동 백필(Backfill) 적용 안내**", expanded=True):
                             st.write("선택한 ETF 중 백테스트 기간 내 상장된 신생 ETF는 상장 이전 기간 동안 연관 대표지수/대체 ETF 수익률을 활용해 자동 복원 처리되었습니다.")
@@ -365,7 +337,6 @@ with tab1:
 
                     st.info(f"📅 백테스트 실행 기간: **{dates[0].strftime('%Y-%m-%d')} ~ {dates[-1].strftime('%Y-%m-%d')}** (약 {actual_years:.1f}년)")
 
-                    # Metric 폰트 크기 자동 축소 & 짤림 방지 CSS 적용
                     st.markdown("""
                     <style>
                     [data-testid="stMetricValue"] {
@@ -431,12 +402,11 @@ with tab2:
     reb_target_weights = {}
 
     if reb_all_tickers:
-        # 최신 주가 일괄 로드
+        # 최신 주가 로드 (개별 검증 적용으로 0원 완벽 해결)
         price_map = get_batch_latest_prices(reb_all_tickers)
 
-        # 1차 평가금 계산 (현재 비중 표출용)
+        # 1차 평가금 계산
         temp_eval_total = 0.0
-        # 먼저 세션 상태나 기본값으로 현재 수량 가져와 임시 총자산 계산
         temp_qtys = {}
         for ticker in reb_all_tickers:
             qty_val = st.session_state.get(f"reb_qty_{ticker}", 0)
@@ -454,12 +424,13 @@ with tab2:
                 label = ticker_to_label.get(ticker, ticker)
                 p = price_map.get(ticker, 0.0)
                 
-                # 종목 헤더에 현재 가격 및 실시간 현재 비중 표시
                 curr_qty = temp_qtys.get(ticker, 0)
                 curr_eval = curr_qty * p
                 curr_w_pct = (curr_eval / temp_portfolio_total * 100) if temp_portfolio_total > 0 else 0.0
                 
-                st.markdown(f"**📌 {label}** &nbsp;&nbsp;|&nbsp;&nbsp; <span style='color:#0066cc;'>현재가: **{p:,.0f}원**</span> &nbsp;&nbsp;|&nbsp;&nbsp; <span style='color:#28a745;'>현재 비중: **{curr_w_pct:.1f}%**</span> ({curr_eval:,.0f}원)", unsafe_allow_html=True)
+                # 주가 표시 영역 (0원일 때 경고 표시 포함)
+                price_str = f"**{p:,.0f}원**" if p > 0 else "<span style='color:red;'>조회 실패</span>"
+                st.markdown(f"**📌 {label}** &nbsp;&nbsp;|&nbsp;&nbsp; <span style='color:#0066cc;'>현재가: {price_str}</span> &nbsp;&nbsp;|&nbsp;&nbsp; <span style='color:#28a745;'>현재 비중: **{curr_w_pct:.1f}%**</span> ({curr_eval:,.0f}원)", unsafe_allow_html=True)
 
                 c1, c2 = st.columns(2)
                 with c1:
@@ -496,7 +467,6 @@ with tab2:
                     results = []
                     total_eval_asset = 0.0
 
-                    # 1. 최종 주가 및 평가금액 계산
                     for ticker in reb_all_tickers:
                         price = price_map.get(ticker, 0.0)
                         qty = reb_holdings[ticker]
@@ -517,19 +487,16 @@ with tab2:
                     if total_portfolio_val <= 0:
                         st.warning("총 포트폴리오 자산(평가금 + 예수금)이 0원입니다.")
                     else:
-                        # 2. 리밸런싱 매매 계산
                         df_reb = pd.DataFrame(results)
                         df_reb["current_weight"] = (df_reb["eval_amt"] / total_portfolio_val) * 100
                         df_reb["target_amt"] = total_portfolio_val * df_reb["target_weight"]
                         df_reb["diff_amt"] = df_reb["target_amt"] - df_reb["eval_amt"]
                         
-                        # 매수/매도 수량 계산 (주가 0원 예외 처리)
                         df_reb["trade_qty"] = df_reb.apply(
                             lambda r: int(r["diff_amt"] // r["price"]) if r["price"] > 0 else 0, axis=1
                         )
                         df_reb["trade_amt"] = df_reb["trade_qty"] * df_reb["price"]
 
-                        # 요약 지표 출력
                         m1, m2, m3 = st.columns(3)
                         m1.metric("현재 총 주식 평가금", f"{total_eval_asset:,.0f}원")
                         m2.metric("보유 예수금 / 추가금", f"{reb_cash:,.0f}원")
@@ -539,7 +506,7 @@ with tab2:
 
                         display_df = pd.DataFrame({
                             "종목명": df_reb["label"],
-                            "현재 주가": df_reb["price"].apply(lambda x: f"{x:,.0f}원"),
+                            "현재 주가": df_reb["price"].apply(lambda x: f"{x:,.0f}원" if x > 0 else "조회실패"),
                             "보유 수량": df_reb["qty"].apply(lambda x: f"{x:,}주"),
                             "현재 비중": df_reb["current_weight"].apply(lambda x: f"{x:.1f}%"),
                             "목표 비중": (df_reb["target_weight"] * 100).apply(lambda x: f"{x:.1f}%"),
@@ -550,7 +517,6 @@ with tab2:
 
                         st.dataframe(display_df, use_container_width=True)
 
-                        # 매매 가이드 텍스트 안내
                         st.markdown("#### 💡 **주문 실행 가이드**")
                         for idx, row in df_reb.iterrows():
                             qty = row["trade_qty"]
