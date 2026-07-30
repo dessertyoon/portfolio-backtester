@@ -6,23 +6,62 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 
 # ---------------------------------------------------------
-# 1. 페이지 기본 설정 및 사용자 보유 종목 DB
+# 1. 페이지 기본 설정 및 전체 종목 DB (기존 대표종목 + 실제 보유종목)
 # ---------------------------------------------------------
-st.set_page_config(page_title="내 포트폴리오 백테스터", layout="wide")
-st.title("📊 내 보유 종목 백테스터 (적립식 투자 & 리밸런싱)")
-st.caption("현재 계좌에 담고 계신 종목들을 바탕으로 과거 성과와 추가 납입 시뮬레이션을 수행합니다.")
+st.set_page_config(page_title="글로벌 & 연금저축 포트폴리오 백테스터", layout="wide")
+st.title("📊 포트폴리오 백테스터 (적립식 투자 & 리밸런싱)")
+st.caption("초기 투자금과 주기별 추가 납입금을 포함하여 과거 리밸런싱 성과를 시뮬레이션합니다.")
 
-# 사용자 보유 종목 데이터베이스 (이미지 기준)
+# 한글 검색 데이터베이스 (보유 종목 + 기존 대표 종목)
 STOCK_DATABASE = {
-    "KIWOOM 미국S&P500모멘텀": "487950.KS",          # 야후 파이낸스 티커 확인 필요시 직접 수정 가능
+    # --- [실제 보유 종목] ---
+    "KIWOOM 미국S&P500모멘텀": "487950.KS",
     "KODEX 미국나스닥100": "441680.KS",
-    "KODEX 미국AI광통신네트워크": "486330.KS",       # 야후 파이낸스 티커 확인 필요시 직접 수정 가능
+    "KODEX 미국AI광통신네트워크": "486330.KS",
     "ACE 미국S&P500": "368590.KS",
     "TIGER 미국테크TOP10 INDXX": "381170.KS",
-    "ACE 미국배당퀄리티": "480410.KS",              # 야후 파이낸스 티커 확인 필요시 직접 수정 가능
+    "ACE 미국배당퀄리티": "480410.KS",
     "PLUS 고배당주": "294200.KS",
     "TIGER 은행고배당플러스TOP10": "458170.KS",
-    "TIGER 반도체TOP10": "446770.KS"
+    "TIGER 반도체TOP10": "446770.KS",
+
+    # --- [연금저축] 대표지수 추종 (S&P500 / 나스닥 / 다우) ---
+    "[연금] TIGER 미국S&P500 (360750)": "360750.KS",
+    "[연금] KODEX 미국S&P500TR (379800)": "379800.KS",
+    "[연금] SOL 미국S&P500 (433330)": "433330.KS",
+    "[연금] TIGER 미국나스닥100 (133690)": "133690.KS",
+    "[연금] KODEX 미국나스닥100TR (379810)": "379810.KS",
+    "[연금] TIGER 미국다우존스30 (245340)": "245340.KS",
+
+    # --- [연금저축] 배당 / 성장 배당 (SCHD / 커버드콜) ---
+    "[연금] TIGER 미국배당다우존스 [SCHD한국판] (458730)": "458730.KS",
+    "[연금] ACE 미국배당다우존스 [SCHD한국판] (423160)": "423160.KS",
+    "[연금] SOL 미국배당다우존스 [SCHD한국판] (446720)": "446720.KS",
+    "[연금] KODEX 미국배당프리미엄Active (438010)": "438010.KS",
+    "[연금] TIGER 미국배당+3%프리미엄다우존스 (474220)": "474220.KS",
+    "[연금] TIGER 미국배당+7%프리미엄다우존스 (474230)": "474230.KS",
+
+    # --- [연금저축] 빅테크 / 반도체 / 테마 ---
+    "[연금] TIGER 미국필라델피아반도체나스닥 (381180)": "381180.KS",
+    "[연금] ACE 미국반도체MV (388420)": "388420.KS",
+    "[연금] ACE 미국빅테크TOP7 Plus (465580)": "465580.KS",
+
+    # --- [연금저축] 미국 장기채권 / 국채 / 안전자산 ---
+    "[연금] ACE 미국30년국채액티브(H) (453850)": "453850.KS",
+    "[연금] TIGER 미국30년스트립액티브 (472150)": "472150.KS",
+    "[연금] TIGER 골드선물(H) [금투자] (139320)": "139320.KS",
+    "[연금] KODEX 200 [코스피200] (069500)": "069500.KS",
+
+    # --- [미국 직투 ETF & 주식] ---
+    "[미국ETF] SPY - S&P500 지수": "SPY",
+    "[미국ETF] QQQ - 나스닥100 지수": "QQQ",
+    "[미국ETF] SCHD - 미국 배당성장": "SCHD",
+    "[미국ETF] TLT - 미국 20년+ 장기국채": "TLT",
+    "[미국ETF] GLD - 금 현물": "GLD",
+    "[미국주식] AAPL - 애플 (Apple)": "AAPL",
+    "[미국주식] MSFT - 마이크로소프트 (Microsoft)": "MSFT",
+    "[미국주식] NVDA - 엔비디아 (NVIDIA)": "NVDA",
+    "[미국주식] TSLA - 테슬라 (Tesla)": "TSLA"
 }
 
 # ---------------------------------------------------------
@@ -30,16 +69,22 @@ STOCK_DATABASE = {
 # ---------------------------------------------------------
 st.sidebar.header("⚙️ 포트폴리오 설정")
 
-# (1) 보유 종목 선택
+# (1) 종목 검색 및 선택 (기본 선택: 실제 보유 종목 중 일부)
 selected_display_names = st.sidebar.multiselect(
-    "🔍 백테스트할 보유 종목 선택",
+    "🔍 종목 검색 및 선택 (한글/영어)",
     options=list(STOCK_DATABASE.keys()),
-    default=list(STOCK_DATABASE.keys())[:5] # 기본적으로 상위 5개 선택
+    default=[
+        "KIWOOM 미국S&P500모멘텀",
+        "KODEX 미국나스닥100",
+        "KODEX 미국AI광통신네트워크",
+        "ACE 미국S&P500",
+        "TIGER 미국테크TOP10 INDXX"
+    ]
 )
 
 selected_tickers = [STOCK_DATABASE[name] for name in selected_display_names]
 
-manual_input = st.sidebar.text_input("➕ 기타 티커 직접 추가 (필요시)", value="")
+manual_input = st.sidebar.text_input("➕ DB에 없는 티커 직접 추가 (예: SOXX, 005930.KS)")
 manual_tickers = [t.strip().upper() for t in manual_input.split(",") if t.strip()]
 
 all_tickers = list(dict.fromkeys(selected_tickers + manual_tickers))
@@ -72,7 +117,7 @@ if abs(total_weight - 1.0) > 0.001:
 
 # (3) 투자 금액 및 리밸런싱/추가 납입 조건
 st.sidebar.subheader("💵 투자 및 리밸런싱 옵션")
-initial_capital = st.sidebar.number_input("초기 투자금 (원/$)", value=8000000, step=1000000)
+initial_capital = st.sidebar.number_input("초기 투자금 (원/$)", value=10000000, step=1000000)
 
 rebalance_freq = st.sidebar.selectbox(
     "리밸런싱 주기", 
@@ -109,7 +154,7 @@ if st.sidebar.button("🚀 백테스트 실행", type="primary"):
             data = raw_data.ffill().bfill().dropna()
 
             if data.empty or len(data) < 10:
-                st.error("데이터가 부족하거나 일부 신규 상장 종목의 과거 데이터가 없을 수 있습니다. 기간을 짧게 설정하거나 데이터를 확인해 주세요.")
+                st.error("데이터가 부족합니다. 신규 상장 종목이 포함되어 있다면 백테스트 기간을 줄이거나 종목을 변경해 주세요.")
             else:
                 daily_returns = data.pct_change().fillna(0)
                 dates = data.index
