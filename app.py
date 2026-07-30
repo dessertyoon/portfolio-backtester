@@ -6,66 +6,115 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 
 # ---------------------------------------------------------
-# 1. 페이지 기본 설정 및 통합 종목 DB
+# 1. 페이지 기본 설정 및 미래에셋 연금계좌 TOP 100 ETF DB
 # ---------------------------------------------------------
 st.set_page_config(page_title="연금저축 백테스터 & 리밸런싱 계산기", layout="wide")
 st.title("📊 연금저축 자산관리 통합 도구")
 
-# 한글 검색 데이터베이스
+# 미래에셋 연금계좌(연금저축/IRP) 매수 가능 주요 ETF TOP 100+ DB
 STOCK_DATABASE = {
-    # --- [실제 보유 종목] ---
-    "KIWOOM 미국S&P500모멘텀": "487950.KS",
-    "KODEX 미국나스닥100": "441680.KS",
-    "KODEX 미국AI광통신네트워크": "486330.KS",
+    # --- [미국 대표지수 추종 (S&P500 / 나스닥 / 다우 / 라셀)] ---
+    "TIGER 미국S&P500": "360750.KS",
+    "KODEX 미국S&P500TR": "379800.KS",
     "ACE 미국S&P500": "368590.KS",
-    "TIGER 미국테크TOP10 INDXX": "381170.KS",
+    "SOL 미국S&P500": "433330.KS",
+    "RISE 미국S&P500": "368200.KS",
+    "TIGER 미국나스닥100": "133690.KS",
+    "KODEX 미국나스닥100TR": "379810.KS",
+    "ACE 미국나스닥100": "367380.KS",
+    "TIGER 미국다우존스30": "245340.KS",
+    "KIWOOM 미국S&P500모멘텀": "487950.KS",
+    "KODEX 미국러셀2000(H)": "284430.KS",
+
+    # --- [미국 배당주 / SCHD / 고배당 / 커버드콜] ---
+    "TIGER 미국배당다우존스 [SCHD]": "458730.KS",
+    "ACE 미국배당다우존스 [SCHD]": "423160.KS",
+    "SOL 미국배당다우존스 [SCHD]": "446720.KS",
     "ACE 미국배당퀄리티": "480410.KS",
+    "TIGER 미국배당+3%프리미엄다우존스": "474220.KS",
+    "TIGER 미국배당+7%프리미엄다우존스": "474230.KS",
+    "KODEX 미국배당프리미엄Active": "438010.KS",
+    "TIGER 미국S&P500타겟데일리커버드콜": "482730.KS",
+    "KODEX 미국30년국채+12%프리미엄(합성H)": "482080.KS",
+
+    # --- [빅테크 / AI / 소프트웨어 / 데이터센터] ---
+    "TIGER 미국테크TOP10 INDXX": "381170.KS",
+    "ACE 미국빅테크TOP7 Plus": "465580.KS",
+    "KODEX 미국나스닥100동일가중": "485030.KS",
+    "TIGER 미국AI빅테크10": "490090.KS",
+    "KODEX 미국AI소프트웨어TOP4Plus": "487820.KS",
+    "KODEX 미국AI전력핵심인프라": "486330.KS",
+    "TIGER 미국AI전력SMR": "486340.KS",
+    "RISE 미국AI테크액티브": "483210.KS",
+    "SOL 미국AI전력인프라": "486350.KS",
+
+    # --- [반도체 / 빅테크 테마] ---
+    "TIGER 미국필라델피아반도체나스닥": "381180.KS",
+    "ACE 미국반도체MV": "388420.KS",
+    "TIGER 미국필라델피아AI반도체나스닥": "497570.KS",
+    "KODEX 미국반도체MV": "391620.KS",
+    "TIGER TSMC파운드리밸류체인": "453950.KS",
+    "TIGER 반도체TOP10": "446770.KS",
+    "KODEX AI반도체핵심공정": "471750.KS",
+
+    # --- [국내 주식 / 대표지수 / 고배당 / 밸류업] ---
+    "KODEX 200": "069500.KS",
+    "TIGER 200": "102110.KS",
+    "KODEX 코스닥150": "229200.KS",
     "PLUS 고배당주": "294200.KS",
     "TIGER 은행고배당플러스TOP10": "458170.KS",
-    "TIGER 반도체TOP10": "446770.KS",
+    "KODEX 코리아밸류업": "489500.KS",
+    "TIGER 코리아밸류업": "489510.KS",
+    "ARIRANG 고배당주": "161510.KS",
+    "KODEX 배당성장": "279530.KS",
 
-    # --- [연금저축] 대표지수 추종 (S&P500 / 나스닥 / 다우) ---
-    "[연금] TIGER 미국S&P500 (360750)": "360750.KS",
-    "[연금] KODEX 미국S&P500TR (379800)": "379800.KS",
-    "[연금] SOL 미국S&P500 (433330)": "433330.KS",
-    "[연금] TIGER 미국나스닥100 (133690)": "133690.KS",
-    "[연금] KODEX 미국나스닥100TR (379810)": "379810.KS",
-    "[연금] TIGER 미국다우존스30 (245340)": "245340.KS",
+    # --- [국내 테마 / 방산 / 조선 / 원자력 / 2차전지] ---
+    "PLUS K방산": "463250.KS",
+    "SOL 조선TOP3플러스": "466920.KS",
+    "TIGER 코리아원자력": "426180.KS",
+    "TIGER 2차전지테마": "305540.KS",
+    "KODEX 2차전지산업": "305720.KS",
+    "TIGER 바이오TOP10": "364970.KS",
+    "TIGER 현대차그룹+": "091230.KS",
 
-    # --- [연금저축] 배당 / 성장 배당 (SCHD / 커버드콜) ---
-    "[연금] TIGER 미국배당다우존스 [SCHD한국판] (458730)": "458730.KS",
-    "[연금] ACE 미국배당다우존스 [SCHD한국판] (423160)": "423160.KS",
-    "[연금] SOL 미국배당다우존스 [SCHD한국판] (446720)": "446720.KS",
-    "[연금] KODEX 미국배당프리미엄Active (438010)": "438010.KS",
-    "[연금] TIGER 미국배당+3%프리미엄다우존스 (474220)": "474220.KS",
-    "[연금] TIGER 미국배당+7%프리미엄다우존스 (474230)": "474230.KS",
+    # --- [글로벌 / 인도 / 일본 / 중국 / 비만치료제] ---
+    "TIGER 인도니프티50": "453870.KS",
+    "KODEX 인도Nifty50": "453880.KS",
+    "ACE 일본TOPIX범설(H)": "196030.KS",
+    "TIGER 일본반도체FACTSET": "465660.KS",
+    "TIGER 차이나항셍테크": "371160.KS",
+    "TIGER 차이나전기차SOLACTIVE": "371460.KS",
+    "TIGER 글로벌비만치료제TOP2 Plus": "476690.KS",
+    "KODEX 글로벌비만치료제TOP2 Plus": "476700.KS",
 
-    # --- [연금저축] 빅테크 / 반도체 / 테마 ---
-    "[연금] TIGER 미국필라델피아반도체나스닥 (381180)": "381180.KS",
-    "[연금] ACE 미국반도체MV (388420)": "388420.KS",
-    "[연금] ACE 미국빅테크TOP7 Plus (465580)": "465580.KS",
+    # --- [채권 / 금 / 자산배분 / 파킹형] ---
+    "ACE 미국30년국채액티브(H)": "453850.KS",
+    "TIGER 미국30년스트립액티브(합성H)": "472150.KS",
+    "KODEX 미국30년국채액티브(H)": "465520.KS",
+    "SOL 미국30년국채커버드콜(합성)": "474130.KS",
+    "TIGER 골드선물(H)": "139320.KS",
+    "ACE 골드선물(H)": "411060.KS",
+    "KODEX KIS국고채30년Enhanced": "385560.KS",
+    "ACE 국고채10년": "365780.KS",
+    "KODEX CD금리액티브(합성)": "459580.KS",
+    "TIGER KOFR금리액티브(합성)": "423150.KS",
+    "KODEX 미국달러SOFR금리액티브(합성)": "449450.KS",
 
-    # --- [연금저축] 미국 장기채권 / 국채 / 안전자산 ---
-    "[연금] ACE 미국30년국채액티브(H) (453850)": "453850.KS",
-    "[연금] TIGER 미국30년스트립액티브 (472150)": "472150.KS",
-    "[연금] TIGER 골드선물(H) [금투자] (139320)": "139320.KS",
-    "[연금] KODEX 200 [코스피200] (069500)": "069500.KS",
-
-    # --- [미국 직투 ETF & 주식] ---
-    "[미국ETF] SPY - S&P500 지수": "SPY",
-    "[미국ETF] QQQ - 나스닥100 지수": "QQQ",
+    # --- [미국 직투 주식 & ETF (해외주식 일반계좌 백테스트용)] ---
+    "[미국ETF] SPY - S&P500": "SPY",
+    "[미국ETF] QQQ - 나스닥100": "QQQ",
     "[미국ETF] SCHD - 미국 배당성장": "SCHD",
-    "[미국ETF] TLT - 미국 20년+ 장기국채": "TLT",
+    "[미국ETF] TLT - 미국 20년+ 장기채": "TLT",
     "[미국ETF] GLD - 금 현물": "GLD",
-    "[미국주식] AAPL - 애플 (Apple)": "AAPL",
-    "[미국주식] MSFT - 마이크로소프트 (Microsoft)": "MSFT",
-    "[미국주식] NVDA - 엔비디아 (NVIDIA)": "NVDA",
-    "[미국주식] TSLA - 테슬라 (Tesla)": "TSLA"
+    "[미국주식] AAPL - 애플": "AAPL",
+    "[미국주식] MSFT - 마이크로소프트": "MSFT",
+    "[미국주식] NVDA - 엔비디아": "NVDA",
+    "[미국주식] TSLA - 테슬라": "TSLA"
 }
 
 ticker_to_label = {v: k for k, v in STOCK_DATABASE.items()}
 
-# 안전한 최신 주가 가져오기 함수 (캐싱으로 속도 향상)
+# 안전한 최신 주가 가져오기 함수 (캐싱 적용)
 @st.cache_data(ttl=300)
 def get_latest_price(ticker):
     try:
@@ -77,15 +126,16 @@ def get_latest_price(ticker):
     except Exception:
         return 0.0
 
-# 탭 생성
+# 탭 구성
 tab1, tab2 = st.tabs(["🚀 포트폴리오 백테스터", "⚖️ 현재 비중 계산 & 매매 리밸런싱"])
+
 
 # =========================================================
 # TAB 1: 백테스트 시뮬레이션
 # =========================================================
 with tab1:
     st.header("백테스트 시뮬레이션")
-    st.caption("선택한 종목과 비중을 바탕으로 과거 성과를 시뮬레이션합니다.")
+    st.caption("미래에셋 연금계좌 주요 ETF 및 선택한 종목의 과거 수익률과 CAGR(연평균 수익률)을 분석합니다.")
     
     st.sidebar.header("⚙️ [백테스트] 설정")
     selected_display_names = st.sidebar.multiselect(
@@ -93,7 +143,7 @@ with tab1:
         options=list(STOCK_DATABASE.keys()),
         default=[
             "KIWOOM 미국S&P500모멘텀",
-            "KODEX 미국나스닥100",
+            "TIGER 미국나스닥100",
             "ACE 미국S&P500",
             "TIGER 미국테크TOP10 INDXX"
         ]
@@ -180,19 +230,29 @@ with tab1:
                     total_invested = total_invested_series.iloc[-1]
                     total_profit = final_val - total_invested
                     total_return = (total_profit / total_invested) * 100
+                    
                     actual_years = (dates[-1] - dates[0]).days / 365.25
+                    
+                    # 🔥 [연간 수익률 (CAGR) 산출]
+                    if actual_years > 0 and total_invested > 0:
+                        cagr = (((final_val / total_invested) ** (1.0 / actual_years)) - 1.0) * 100
+                    else:
+                        cagr = 0.0
+
                     peak = portfolio_series.cummax()
                     drawdown = (portfolio_series - peak) / peak
                     mdd = drawdown.min() * 100
 
-                    st.info(f"📅 백테스트 기간: **{dates[0].strftime('%Y-%m-%d')} ~ {dates[-1].strftime('%Y-%m-%d')}** (약 {actual_years:.1f}년)")
+                    st.info(f"📅 백테스트 실행 기간: **{dates[0].strftime('%Y-%m-%d')} ~ {dates[-1].strftime('%Y-%m-%d')}** (약 {actual_years:.1f}년)")
 
-                    col1, col2, col3, col4, col5 = st.columns(5)
+                    # 6개 요약 지표 출력
+                    col1, col2, col3, col4, col5, col6 = st.columns(6)
                     col1.metric("총 투입 원금", f"{total_invested:,.0f}원")
                     col2.metric("최종 평가 금액", f"{final_val:,.0f}원")
                     col3.metric("순수익금", f"{total_profit:+,.0f}원")
-                    col4.metric("수익률", f"{total_return:+.2f}%")
-                    col5.metric("MDD (최대 낙폭)", f"{mdd:.2f}%", delta_color="inverse")
+                    col4.metric("누적 수익률", f"{total_return:+.2f}%")
+                    col5.metric("연평균 수익률 (CAGR)", f"{cagr:+.2f}%")
+                    col6.metric("MDD (최대 낙폭)", f"{mdd:.2f}%", delta_color="inverse")
 
                     fig = go.Figure()
                     fig.add_trace(go.Scatter(x=portfolio_series.index, y=portfolio_series.values, mode='lines', name='포트폴리오 평가금', line=dict(color='#1f77b4', width=2)))
@@ -206,13 +266,13 @@ with tab1:
 # =========================================================
 with tab2:
     st.header("현재 비중 자동 계산 & 리밸런싱 주문 가이드")
-    st.caption("현재 보유 주식 수를 입력하면 실시간 현재가로 현재 비중을 자동 계산하고, 목표 비중에 맞추기 위한 필요 매수/매도 수량을 알려줍니다.")
+    st.caption("보유 수량을 입력하면 실시간 주가 기준 현재 비중을 자동 계산하고, 목표 비중 맞춤용 매수/매도 수량을 안내합니다.")
 
     reb_selected_names = st.multiselect(
         "🔍 현재 보유 중이거나 리밸런싱에 포함할 종목 선택",
         options=list(STOCK_DATABASE.keys()),
         default=[
-            "ACE 미국배당퀄리티",
+            "TIGER 미국배당다우존스 [SCHD]",
             "PLUS 고배당주"
         ],
         key="reb_select"
@@ -227,12 +287,10 @@ with tab2:
         
         st.subheader("1️⃣ 보유 수량 및 목표 비중 입력")
 
-        # 실시간 가격 미리 수집 및 총 평가금액 산출
-        prices = {}
-        for ticker in reb_tickers:
-            prices[ticker] = get_latest_price(ticker)
+        # 실시간 가격 수집
+        prices = {ticker: get_latest_price(ticker) for ticker in reb_tickers}
 
-        # 1차 루프: 현재 평가금액 총합 구하기
+        # 현재 평가금액 총합 계산
         temp_shares = {}
         total_current_val = 0.0
         for ticker in reb_tickers:
@@ -240,7 +298,7 @@ with tab2:
             temp_shares[ticker] = s_val
             total_current_val += s_val * prices[ticker]
 
-        # 입력 레이아웃 헤더 설정 (5개 컬럼: 종목명 | 보유 수량 | 현재가 | 현재 비중 | 목표 비중)
+        # 레이아웃 헤더 (5컬럼: 종목명 | 보유 수량 | 현재가 | 현재 비중 | 목표 비중)
         cols = st.columns([3, 2, 2, 2, 2])
         cols[0].markdown("**종목명**")
         cols[1].markdown("**현재 보유 수량 (주)**")
@@ -260,7 +318,6 @@ with tab2:
             
             shares = c2.number_input(f"보유 수량 ({label})", min_value=0, value=10, step=1, label_visibility="collapsed", key=f"shares_{ticker}")
             
-            # 현재 평가금 및 현재 비중 실시간 계산
             cur_val = shares * p
             cur_weight_pct = (cur_val / total_current_val * 100.0) if total_current_val > 0 else 0.0
             
