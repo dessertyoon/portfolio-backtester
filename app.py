@@ -4,6 +4,7 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
+from scipy.optimize import minimize
 
 # ---------------------------------------------------------
 # 1. 페이지 기본 설정 및 미래에셋 연금계좌 TOP 100 ETF DB
@@ -210,6 +211,37 @@ def fetch_and_backfill_data(tickers, start_date, end_date):
     final_df = backfilled_df.reindex(columns=tickers).ffill().bfill().dropna()
     return final_df, backfill_info
 
+# --- 최적 포트폴리오 비중 계산 함수 ---
+def optimize_portfolio(df_returns, criterion="sharpe"):
+    num_assets = len(df_returns.columns)
+    mean_returns = df_returns.mean() * 252
+    cov_matrix = df_returns.cov() * 252
+
+    def portfolio_performance(w):
+        ret = np.sum(mean_returns * w)
+        vol = np.sqrt(np.dot(w.T, np.dot(cov_matrix, w)))
+        sharpe = (ret - 0.03) / vol if vol != 0 else 0 # 리스크 프리 라인 3%
+        return ret, vol, sharpe
+
+    # 목표 함수
+    if criterion == "max_return":
+        def min_func(w): return -portfolio_performance(w)[0]
+    elif criterion == "sharpe":
+        def min_func(w): return -portfolio_performance(w)[2]
+    elif criterion == "min_vol":
+        def min_func(w): return portfolio_performance(w)[1]
+
+    constraints = ({'type': 'eq', 'fun': lambda x: np.sum(x) - 1})
+    bounds = tuple((0.0, 1.0) for _ in range(num_assets))
+    init_guess = num_assets * [1.0 / num_assets,]
+
+    opts = minimize(min_func, init_guess, method='SLSQP', bounds=bounds, constraints=constraints)
+    
+    if opts.success:
+        return opts.x
+    else:
+        return init_guess
+
 # 탭 구성
 tab1, tab2 = st.tabs(["🚀 포트폴리오 백테스터", "⚖️ 현재 비중 계산 & 매매 리밸런싱"])
 
@@ -238,30 +270,6 @@ with tab1:
     manual_tickers = [t.strip().upper() for t in manual_input.split(",") if t.strip()]
     all_tickers = list(dict.fromkeys(selected_tickers + manual_tickers))
 
-    weights = []
-    st.sidebar.subheader("⚖️ 백테스트 목표 비중 (%)")
-    default_weight = round(100 / len(all_tickers), 1) if all_tickers else 0.0
-
-    for ticker in all_tickers:
-        label = ticker_to_label.get(ticker, ticker)
-        w = st.sidebar.number_input(
-            f"{label} 비중 (%)", 
-            min_value=0.0, 
-            max_value=100.0, 
-            value=default_weight, 
-            step=5.0,
-            key=f"bt_weight_{ticker}"
-        )
-        weights.append(w / 100.0)
-
-    total_weight = sum(weights)
-    if abs(total_weight - 1.0) > 0.001 and all_tickers:
-        st.sidebar.error(f"⚠️ 비중 합계가 100%여야 합니다. (현재: {total_weight*100:.1f}%)")
-
-    initial_capital = st.sidebar.number_input("초기 투자금 (원)", value=10000000, step=1000000, key="bt_init")
-    rebalance_freq = st.sidebar.selectbox("리밸런싱 주기", ["월간 (Monthly)", "분기 (Quarterly)", "연간 (Annually)", "리밸런싱 안함 (No Rebalance)"], key="bt_freq")
-    add_cash = st.sidebar.number_input("회차당 추가 납입금 (원)", value=1000000, step=100000, key="bt_add")
-
     # --- 백테스팅 기간 설정 (월 단위 및 최대 30년 지원) ---
     st.sidebar.subheader("📅 백테스트 기간 설정 (월 단위)")
     
@@ -283,11 +291,63 @@ with tab1:
         end_month = st.selectbox("종료 월", options=months_list, index=current_month - 1, key="bt_em")
 
     start_date = datetime(start_year, start_month, 1)
-    # 종료일은 해당 월의 마지막 날로 설정
     if end_month == 12:
         end_date = datetime(end_year, 12, 31)
     else:
         end_date = datetime(end_year, end_month + 1, 1) - timedelta(days=1)
+
+    # --- ✨ NEW: 30년 최적 비중 탐색 기능 ---
+    st.sidebar.subheader("💡 최적 비중 자동 추천")
+    opt_criterion = st.sidebar.selectbox(
+        "추천 기준 선택",
+        ["수익률 극대화 (Max Return)", "샤프 지수 극대화 (Max Sharpe)", "위험 최소화 (Min Volatility)"],
+        key="opt_criterion_select"
+    )
+
+    if st.sidebar.button("🔮 선택한 기간 기준 최적 비중 계산", key="btn_optimize"):
+        if not all_tickers:
+            st.error("종목을 선택해 주세요.")
+        else:
+            with st.spinner("과거 데이터 수집 및 최적 비중 솔버 작동 중..."):
+                opt_data, _ = fetch_and_backfill_data(all_tickers, start_date, end_date)
+                if not opt_data.empty:
+                    daily_rets = opt_data.pct_change().dropna()
+                    crit_key = "max_return" if "수익률" in opt_criterion else ("sharpe" if "샤프" in opt_criterion else "min_vol")
+                    best_weights = optimize_portfolio(daily_rets, criterion=crit_key)
+                    
+                    # Session state에 최적 비중 적용
+                    for idx, ticker in enumerate(all_tickers):
+                        st.session_state[f"bt_weight_{ticker}"] = round(float(best_weights[idx] * 100), 1)
+                    st.sidebar.success("✅ 최적 비중이 설정에 반영되었습니다!")
+
+    weights = []
+    st.sidebar.subheader("⚖️ 백테스트 목표 비중 (%)")
+    default_weight = round(100 / len(all_tickers), 1) if all_tickers else 0.0
+
+    for ticker in all_tickers:
+        label = ticker_to_label.get(ticker, ticker)
+        
+        # session_state 값 안전 체크
+        val_key = f"bt_weight_{ticker}"
+        if val_key not in st.session_state:
+            st.session_state[val_key] = default_weight
+
+        w = st.sidebar.number_input(
+            f"{label} 비중 (%)", 
+            min_value=0.0, 
+            max_value=100.0, 
+            step=1.0,
+            key=val_key
+        )
+        weights.append(w / 100.0)
+
+    total_weight = sum(weights)
+    if abs(total_weight - 1.0) > 0.001 and all_tickers:
+        st.sidebar.error(f"⚠️ 비중 합계가 100%여야 합니다. (현재: {total_weight*100:.1f}%)")
+
+    initial_capital = st.sidebar.number_input("초기 투자금 (원)", value=10000000, step=1000000, key="bt_init")
+    rebalance_freq = st.sidebar.selectbox("리밸런싱 주기", ["월간 (Monthly)", "분기 (Quarterly)", "연간 (Annually)", "리밸런싱 안함 (No Rebalance)"], key="bt_freq")
+    add_cash = st.sidebar.number_input("회차당 추가 납입금 (원)", value=1000000, step=100000, key="bt_add")
 
     if st.sidebar.button("🚀 백테스트 실행", type="primary", key="bt_btn"):
         if not all_tickers:
@@ -423,14 +483,12 @@ with tab2:
     final_prices = {}
 
     if reb_all_tickers:
-        # 1차 최신 주가 로드
         fetched_price_map = get_batch_latest_prices(reb_all_tickers)
 
         with col_right:
             st.subheader("2️⃣ 보유 수량, 주가 및 목표 비중 설정")
             def_reb_w = round(100.0 / len(reb_all_tickers), 1)
 
-            # 먼저 각 종목별 최종 주가를 파악하여 전체 평가금 임시 계산
             temp_eval_total = 0.0
             for ticker in reb_all_tickers:
                 fetched_p = fetched_price_map.get(ticker, 0.0)
@@ -443,10 +501,8 @@ with tab2:
             for ticker in reb_all_tickers:
                 label = ticker_to_label.get(ticker, ticker)
                 fetched_p = fetched_price_map.get(ticker, 0.0)
-                
                 curr_qty = st.session_state.get(f"reb_qty_{ticker}", 0)
                 
-                # 라벨 및 주가 상태 안내
                 if fetched_p > 0:
                     price_status = f"<span style='color:#0066cc;'>자동조회: {fetched_p:,.0f}원</span>"
                 else:
@@ -487,7 +543,6 @@ with tab2:
                     )
                     reb_target_weights[ticker] = tw / 100.0
 
-                # 현재 평가금 및 실시간 비중 표시
                 eval_p = final_prices[ticker]
                 curr_eval = qty * eval_p
                 curr_w_pct = (curr_eval / temp_portfolio_total * 100) if temp_portfolio_total > 0 else 0.0
