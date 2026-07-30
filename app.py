@@ -63,6 +63,20 @@ STOCK_DATABASE = {
     "[미국주식] TSLA - 테슬라 (Tesla)": "TSLA"
 }
 
+ticker_to_label = {v: k for k, v in STOCK_DATABASE.items()}
+
+# 안전한 최신 주가 가져오기 함수 (캐싱으로 속도 향상)
+@st.cache_data(ttl=300)
+def get_latest_price(ticker):
+    try:
+        ticker_obj = yf.Ticker(ticker)
+        hist = ticker_obj.history(period="7d")
+        if not hist.empty:
+            return float(hist['Close'].dropna().iloc[-1])
+        return 0.0
+    except Exception:
+        return 0.0
+
 # 탭 생성
 tab1, tab2 = st.tabs(["🚀 포트폴리오 백테스터", "⚖️ 현재 비중 계산 & 매매 리밸런싱"])
 
@@ -80,7 +94,6 @@ with tab1:
         default=[
             "KIWOOM 미국S&P500모멘텀",
             "KODEX 미국나스닥100",
-            "KODEX 미국AI광통신네트워크",
             "ACE 미국S&P500",
             "TIGER 미국테크TOP10 INDXX"
         ]
@@ -94,8 +107,6 @@ with tab1:
     weights = []
     st.sidebar.subheader("⚖️ 백테스트 목표 비중 (%)")
     default_weight = round(100 / len(all_tickers), 1) if all_tickers else 0.0
-
-    ticker_to_label = {v: k for k, v in STOCK_DATABASE.items()}
 
     for ticker in all_tickers:
         label = ticker_to_label.get(ticker, ticker)
@@ -195,17 +206,12 @@ with tab1:
 # =========================================================
 with tab2:
     st.header("현재 비중 자동 계산 & 리밸런싱 주문 가이드")
-    st.caption("현재 보유 주식 수를 입력하면 현재 비중을 계산하고, 목표 비중에 맞추기 위한 필요 매수/매도 수량을 알려줍니다.")
+    st.caption("현재 보유 주식 수를 입력하면 실시간 현재가로 현재 비중을 자동 계산하고, 목표 비중에 맞추기 위한 필요 매수/매도 수량을 알려줍니다.")
 
     reb_selected_names = st.multiselect(
         "🔍 현재 보유 중이거나 리밸런싱에 포함할 종목 선택",
         options=list(STOCK_DATABASE.keys()),
         default=[
-            "KIWOOM 미국S&P500모멘텀",
-            "KODEX 미국나스닥100",
-            "KODEX 미국AI광통신네트워크",
-            "ACE 미국S&P500",
-            "TIGER 미국테크TOP10 INDXX",
             "ACE 미국배당퀄리티",
             "PLUS 고배당주"
         ],
@@ -217,32 +223,58 @@ with tab2:
     if not reb_tickers:
         st.warning("종목을 선택해 주세요.")
     else:
-        # 추가 입금액 입력
         extra_cash = st.number_input("💵 이번 리밸런싱 시 추가로 입금할 금액 (원)", value=1000000, step=100000, key="reb_extra_cash")
         
         st.subheader("1️⃣ 보유 수량 및 목표 비중 입력")
-        st.markdown("각 종목의 **현재 보유 주식 수(주)**와 **목표 비중(%)**을 입력해 주세요.")
 
-        # 입력용 컬럼 설정
+        # 실시간 가격 미리 수집 및 총 평가금액 산출
+        prices = {}
+        for ticker in reb_tickers:
+            prices[ticker] = get_latest_price(ticker)
+
+        # 1차 루프: 현재 평가금액 총합 구하기
+        temp_shares = {}
+        total_current_val = 0.0
+        for ticker in reb_tickers:
+            s_val = st.session_state.get(f"shares_{ticker}", 10)
+            temp_shares[ticker] = s_val
+            total_current_val += s_val * prices[ticker]
+
+        # 입력 레이아웃 헤더 설정 (5개 컬럼: 종목명 | 보유 수량 | 현재가 | 현재 비중 | 목표 비중)
+        cols = st.columns([3, 2, 2, 2, 2])
+        cols[0].markdown("**종목명**")
+        cols[1].markdown("**현재 보유 수량 (주)**")
+        cols[2].markdown("**현재가 (원)**")
+        cols[3].markdown("**현재 비중 (%)**")
+        cols[4].markdown("**목표 비중 (%)**")
+
         input_data = []
         default_target_w = round(100.0 / len(reb_tickers), 1)
 
-        cols = st.columns([3, 2, 2])
-        cols[0].markdown("**종목명**")
-        cols[1].markdown("**현재 보유 주식 수 (주)**")
-        cols[2].markdown("**목표 비중 (%)**")
-
         for idx, ticker in enumerate(reb_tickers):
             label = ticker_to_label.get(ticker, ticker)
-            c1, c2, c3 = st.columns([3, 2, 2])
+            p = prices[ticker]
+            
+            c1, c2, c3, c4, c5 = st.columns([3, 2, 2, 2, 2])
             c1.write(f"**{label}**")
+            
             shares = c2.number_input(f"보유 수량 ({label})", min_value=0, value=10, step=1, label_visibility="collapsed", key=f"shares_{ticker}")
-            target_w = c3.number_input(f"목표 비중 ({label})", min_value=0.0, max_value=100.0, value=default_target_w, step=1.0, label_visibility="collapsed", key=f"target_w_{ticker}")
+            
+            # 현재 평가금 및 현재 비중 실시간 계산
+            cur_val = shares * p
+            cur_weight_pct = (cur_val / total_current_val * 100.0) if total_current_val > 0 else 0.0
+            
+            c3.write(f"{int(p):,}원" if p > 0 else "조회불가")
+            c4.markdown(f"**{cur_weight_pct:.2f}%**")
+            
+            target_w = c5.number_input(f"목표 비중 ({label})", min_value=0.0, max_value=100.0, value=default_target_w, step=1.0, label_visibility="collapsed", key=f"target_w_{ticker}")
             
             input_data.append({
                 "ticker": ticker,
                 "label": label,
                 "shares": shares,
+                "price": p,
+                "current_val": cur_val,
                 "target_weight": target_w / 100.0
             })
 
@@ -250,71 +282,50 @@ with tab2:
         if abs(sum_target_w - 1.0) > 0.001:
             st.error(f"⚠️ 목표 비중의 합이 100%가 되어야 합니다. (현재 합계: {sum_target_w*100:.1f}%)")
 
-        if st.button("🧮 리밸런싱 계산하기", type="primary"):
+        if st.button("🧮 리밸런싱 주문 가이드 계산하기", type="primary"):
             if abs(sum_target_w - 1.0) > 0.001:
                 st.error("목표 비중의 합을 100%로 맞춘 후 계산 버튼을 눌러주세요.")
             else:
-                with st.spinner("최신 주가 정보를 불러오는 중입니다..."):
-                    # 야후 파이낸스 최신 가격 조회
-                    price_data = yf.download(reb_tickers, period="5d")['Close']
+                total_future_val = total_current_val + extra_cash
+
+                results = []
+                for item in input_data:
+                    p = item["price"]
+                    cur_val = item["current_val"]
+                    cur_weight = (cur_val / total_current_val) if total_current_val > 0 else 0.0
                     
-                    latest_prices = {}
-                    for ticker in reb_tickers:
-                        if isinstance(price_data, pd.DataFrame):
-                            latest_prices[ticker] = float(price_data[ticker].dropna().iloc[-1])
-                        else:
-                            latest_prices[ticker] = float(price_data.dropna().iloc[-1])
+                    target_val = total_future_val * item["target_weight"]
+                    diff_val = target_val - cur_val
+                    diff_shares = int(round(diff_val / p)) if p > 0 else 0
 
-                    # 리밸런싱 연산
-                    total_current_val = 0.0
-                    for item in input_data:
-                        t = item["ticker"]
-                        p = latest_prices[t]
-                        item["price"] = p
-                        item["current_val"] = item["shares"] * p
-                        total_current_val += item["current_val"]
+                    if diff_shares > 0:
+                        action = f"🟢 **매수 {diff_shares}주** (+{int(diff_val):,}원)"
+                    elif diff_shares < 0:
+                        action = f"🔴 **매도 {abs(diff_shares)}주** ({int(diff_val):,}원)"
+                    else:
+                        action = "⚪ **유지 (0주)**"
 
-                    total_future_val = total_current_val + extra_cash
+                    results.append({
+                        "종목명": item["label"],
+                        "현재가": f"{int(p):,}원" if p > 0 else "조회 실패",
+                        "보유수량": f"{item['shares']}주",
+                        "현재 평가금액": f"{int(cur_val):,}원",
+                        "현재 비중": f"{cur_weight*100:.2f}%",
+                        "목표 비중": f"{item['target_weight']*100:.1f}%",
+                        "목표 평가금액": f"{int(target_val):,}원",
+                        "추천 매매 수량": action
+                    })
 
-                    results = []
-                    for item in input_data:
-                        t = item["ticker"]
-                        p = item["price"]
-                        cur_val = item["current_val"]
-                        cur_weight = (cur_val / total_current_val) if total_current_val > 0 else 0.0
-                        
-                        target_val = total_future_val * item["target_weight"]
-                        diff_val = target_val - cur_val
-                        diff_shares = int(round(diff_val / p)) if p > 0 else 0
+                res_df = pd.DataFrame(results)
 
-                        if diff_shares > 0:
-                            action = f"🟢 **매수 {diff_shares}주** (+{int(diff_val):,}원)"
-                        elif diff_shares < 0:
-                            action = f"🔴 **매도 {abs(diff_shares)}주** ({int(diff_val):,}원)"
-                        else:
-                            action = "⚪ **유지 (0주)**"
+                st.markdown("---")
+                st.subheader("2️⃣ 리밸런싱 결과 분석")
+                
+                col_a, col_b, col_c = st.columns(3)
+                col_a.metric("현재 자산 총액", f"{int(total_current_val):,}원")
+                col_b.metric("추가 입금 예정액", f"{int(extra_cash):,}원")
+                col_c.metric("리밸런싱 후 목표 총 자산", f"{int(total_future_val):,}원")
 
-                        results.append({
-                            "종목명": item["label"],
-                            "현재가": f"{int(p):,}원",
-                            "보유수량": f"{item['shares']}주",
-                            "현재 평가금액": f"{int(cur_val):,}원",
-                            "현재 비중": f"{cur_weight*100:.2f}%",
-                            "목표 비중": f"{item['target_weight']*100:.1f}%",
-                            "목표 평가금액": f"{int(target_val):,}원",
-                            "추천 매매 수량": action
-                        })
-
-                    res_df = pd.DataFrame(results)
-
-                    st.markdown("---")
-                    st.subheader("2️⃣ 리밸런싱 결과 분석")
-                    
-                    col_a, col_b, col_c = st.columns(3)
-                    col_a.metric("현재 자산 총액", f"{int(total_current_val):,}원")
-                    col_b.metric("추가 입금 예정액", f"{int(extra_cash):,}원")
-                    col_c.metric("리밸런싱 후 목표 총 자산", f"{int(total_future_val):,}원")
-
-                    st.markdown("### 📋 종목별 매매 주문 가이드")
-                    st.write("아래 안내된 수량만큼 증권사 앱에서 매수/매도 주문을 실행하시면 목표 비중에 맞춰집니다.")
-                    st.dataframe(res_df, use_container_width=True)
+                st.markdown("### 📋 종목별 매매 주문 가이드")
+                st.write("아래 안내된 수량만큼 증권사 앱에서 매수/매도 주문을 실행하시면 목표 비중에 맞춰집니다.")
+                st.dataframe(res_df, use_container_width=True)
