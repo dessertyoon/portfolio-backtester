@@ -159,8 +159,8 @@ def get_latest_price(ticker):
 # ---------------------------------------------------------
 def fetch_and_backfill_data(tickers, start_date, end_date):
     """
-    종목별 데이터를 수집하되, 백테스트 시작일 이후에 상장되어 
-    데이터가 부족한 종목은 대체 티커(BACKFILL_MAP)의 수익률로 과거를 채웁니다.
+    종목별 데이터를 수집하되, 백테스트 시작일 이후에 상장되었거나 
+    데이터가 없는 종목은 대체 티커(BACKFILL_MAP)의 수익률로 과거/전체 데이터를 안전하게 백필합니다.
     """
     all_needed_tickers = set(tickers)
     for t in tickers:
@@ -179,34 +179,25 @@ def fetch_and_backfill_data(tickers, start_date, end_date):
     backfill_info = []
 
     for t in tickers:
-        if t not in raw_data.columns:
-            continue
+        label = ticker_to_label.get(t, t)
+        bench_ticker = BACKFILL_MAP.get(t, "SPY")
         
-        series = raw_data[t].dropna()
-        if series.empty:
-            continue
+        # 원본 데이터가 존재하고 비어있지 않은 경우
+        if t in raw_data.columns and not raw_data[t].dropna().empty:
+            series = raw_data[t].dropna()
+            first_valid_idx = series.index[0]
             
-        first_valid_idx = series.index[0]
-        
-        # 백테스트 시작일보다 상장일이 늦고, 대체 티커가 등록되어 있는 경우
-        if first_valid_idx > raw_data.index[0] and t in BACKFILL_MAP:
-            bench_ticker = BACKFILL_MAP[t]
-            if bench_ticker in raw_data.columns:
+            # 백테스트 시작일보다 상장일이 늦은 경우 대체 티커 수익률로 과거 백필
+            if first_valid_idx > raw_data.index[0] and bench_ticker in raw_data.columns:
                 bench_series = raw_data[bench_ticker]
-                
-                # 상장일 당일의 수익률 연결 기준점
                 base_price = series.loc[first_valid_idx]
-                
-                # 대체 종목의 일별 수익률 계산
                 bench_pct = bench_series.pct_change().fillna(0)
                 
-                # 상장 이전 기간에 대해 대체 종목 수익률을 역산하여 과거 주가 추정
                 past_dates = raw_data.index[raw_data.index < first_valid_idx]
                 estimated_prices = {}
                 
                 curr_p = base_price
                 for d in reversed(past_dates):
-                    # 역방향 계산: P_{t-1} = P_t / (1 + r_t)
                     r = bench_pct.loc[d]
                     curr_p = curr_p / (1 + r) if (1 + r) != 0 else curr_p
                     estimated_prices[d] = curr_p
@@ -215,15 +206,20 @@ def fetch_and_backfill_data(tickers, start_date, end_date):
                 combined_series = pd.concat([past_series, series])
                 backfilled_df[t] = combined_series
                 
-                label = ticker_to_label.get(t, t)
                 bench_label = ticker_to_label.get(bench_ticker, bench_ticker)
                 backfill_info.append(f"**{label}** ({first_valid_idx.strftime('%Y-%m-%d')} 상장) ➡️ **{bench_label}** 수익률로 과거 데이터 백필 적용")
             else:
                 backfilled_df[t] = raw_data[t]
         else:
-            backfilled_df[t] = raw_data[t]
+            # 원본 데이터가 완전히 없는 경우 대체 티커 데이터로 전체 대체
+            if bench_ticker in raw_data.columns:
+                backfilled_df[t] = raw_data[bench_ticker]
+                bench_label = ticker_to_label.get(bench_ticker, bench_ticker)
+                backfill_info.append(f"**{label}** (최신 데이터 수집 불량) ➡️ **{bench_label}** 데이터로 100% 대체 적용")
 
-    return backfilled_df.dropna(), backfill_info
+    # 모든 요청 티커 순서 및 존재 여부 보장
+    final_df = backfilled_df.reindex(columns=tickers).ffill().bfill().dropna()
+    return final_df, backfill_info
 
 # 탭 구성
 tab1, tab2 = st.tabs(["🚀 포트폴리오 백테스터", "⚖️ 현재 비중 계산 & 매매 리밸런싱"])
@@ -287,6 +283,25 @@ with tab1:
             with st.spinner("주가 데이터 수집 및 대체 지수 백필 처리 중..."):
                 end_date = datetime.today()
                 start_date = end_date - timedelta(days=int(years * 365.25))
+                # (백테스트 실행 부분 중 일부)
+data, backfill_info = fetch_and_backfill_data(all_tickers, start_date, end_date)
+
+if data.empty or len(data) < 10:
+    st.error("데이터가 부족합니다. 백테스트 기간이나 종목을 변경해 주세요.")
+else:
+    # 🔥 [추가] 선택한 종목(all_tickers)과 컬럼 순서 및 개수를 정확히 일치시킴
+    data = data[all_tickers]
+    
+    # 백필 정보 안내
+    if backfill_info:
+        with st.expander("💡 **신규 상장 ETF 자동 백필(Backfill) 적용 안내**", expanded=True):
+            st.write("선택한 ETF 중 백테스트 기간 내 상장된 신생 ETF는 상장 이전 기간 동안 연관 대표지수/대체 ETF 수익률을 활용해 자동 복원 처리되었습니다.")
+            for info in backfill_info:
+                st.markdown(f"- {info}")
+
+    daily_returns = data.pct_change().fillna(0)
+    dates = data.index
+    # ... (이후 기존 백테스트 계산 루프 동일)
 
                 # 백필 지원 수집 함수 활용
                 data, backfill_info = fetch_and_backfill_data(all_tickers, start_date, end_date)
