@@ -134,11 +134,11 @@ BACKFILL_MAP = {
     "489500.KS": "069500.KS", "489510.KS": "069500.KS", "102110.KS": "069500.KS",
     # AI 전력 / 인프라 -> XLU (미국 유틸리티 ETF) 또는 QQQ
     "486330.KS": "XLU", "486340.KS": "XLU", "483210.KS": "QQQ", "486350.KS": "XLU"
-    BACKFILL_MAP = {
+    BACKFILL_MAP = 
 
     # AI 광통신/네트워크 -> QQQ 백필 매핑 추가
     "0173Y0.KS": "QQQ",
-}
+
 }
 
 ticker_to_label = {v: k for k, v in STOCK_DATABASE.items()}
