@@ -131,7 +131,7 @@ BACKFILL_MAP = {
 
 ticker_to_label = {v: k for k, v in STOCK_DATABASE.items()}
 
-# 단일 종목 최신가 안전 조회 함수 (개별 조회용)
+# 단일 종목 최신가 안전 조회 함수
 @st.cache_data(ttl=300)
 def get_single_latest_price(ticker):
     try:
@@ -145,21 +145,16 @@ def get_single_latest_price(ticker):
     except Exception:
         return 0.0
 
-# 개선된 주가 일괄 수집 함수 (0원 오류 완벽 방지)
 @st.cache_data(ttl=300)
 def get_batch_latest_prices(tickers):
     prices = {}
     if not tickers:
         return prices
-    
-    # 1차: 개별 안정 조회를 기본적으로 수행하여 0원 누락 보장
     for t in tickers:
-        p = get_single_latest_price(t)
-        prices[t] = p
-        
+        prices[t] = get_single_latest_price(t)
     return prices
 
-# 자동 백필(Backfill) 지원 주가 데이터 수집 함수
+# 자동 백필 지원 데이터 수집 함수
 def fetch_and_backfill_data(tickers, start_date, end_date):
     all_needed_tickers = set(tickers)
     for t in tickers:
@@ -370,7 +365,7 @@ with tab1:
 # =========================================================
 with tab2:
     st.header("현재 비중 계산 & 매매 리밸런싱")
-    st.caption("현재 보유 수량과 예수금을 입력하면 실시간 최신 주가를 불러와 현재 비중(%)과 매매 주문 수량을 자동으로 계산해 줍니다.")
+    st.caption("보유 수량과 예수금을 입력하면 현재 비중과 리밸런싱 매매 수량을 계산합니다. (주가 조회 실패 시 직접 주가를 입력할 수 있습니다)")
 
     col_left, col_right = st.columns([1, 1])
 
@@ -400,60 +395,81 @@ with tab2:
 
     reb_holdings = {}
     reb_target_weights = {}
+    final_prices = {}
 
     if reb_all_tickers:
-        # 최신 주가 로드 (개별 검증 적용으로 0원 완벽 해결)
-        price_map = get_batch_latest_prices(reb_all_tickers)
-
-        # 1차 평가금 계산
-        temp_eval_total = 0.0
-        temp_qtys = {}
-        for ticker in reb_all_tickers:
-            qty_val = st.session_state.get(f"reb_qty_{ticker}", 0)
-            p = price_map.get(ticker, 0.0)
-            temp_eval_total += (qty_val * p)
-            temp_qtys[ticker] = qty_val
-
-        temp_portfolio_total = temp_eval_total + reb_cash
+        # 1차 최신 주가 로드
+        fetched_price_map = get_batch_latest_prices(reb_all_tickers)
 
         with col_right:
-            st.subheader("2️⃣ 보유 수량 및 목표 비중 설정")
+            st.subheader("2️⃣ 보유 수량, 주가 및 목표 비중 설정")
             def_reb_w = round(100.0 / len(reb_all_tickers), 1)
+
+            # 먼저 각 종목별 최종 주가를 파악하여 전체 평가금 임시 계산
+            temp_eval_total = 0.0
+            for ticker in reb_all_tickers:
+                fetched_p = fetched_price_map.get(ticker, 0.0)
+                # 수동 주가 입력값이 세션에 있으면 우선 사용
+                user_p = st.session_state.get(f"reb_price_{ticker}", float(fetched_p))
+                curr_qty = st.session_state.get(f"reb_qty_{ticker}", 0)
+                temp_eval_total += (curr_qty * user_p)
+
+            temp_portfolio_total = temp_eval_total + reb_cash
 
             for ticker in reb_all_tickers:
                 label = ticker_to_label.get(ticker, ticker)
-                p = price_map.get(ticker, 0.0)
+                fetched_p = fetched_price_map.get(ticker, 0.0)
                 
-                curr_qty = temp_qtys.get(ticker, 0)
-                curr_eval = curr_qty * p
-                curr_w_pct = (curr_eval / temp_portfolio_total * 100) if temp_portfolio_total > 0 else 0.0
+                curr_qty = st.session_state.get(f"reb_qty_{ticker}", 0)
                 
-                # 주가 표시 영역 (0원일 때 경고 표시 포함)
-                price_str = f"**{p:,.0f}원**" if p > 0 else "<span style='color:red;'>조회 실패</span>"
-                st.markdown(f"**📌 {label}** &nbsp;&nbsp;|&nbsp;&nbsp; <span style='color:#0066cc;'>현재가: {price_str}</span> &nbsp;&nbsp;|&nbsp;&nbsp; <span style='color:#28a745;'>현재 비중: **{curr_w_pct:.1f}%**</span> ({curr_eval:,.0f}원)", unsafe_allow_html=True)
+                # 라벨 및 주가 상태 안내
+                if fetched_p > 0:
+                    price_status = f"<span style='color:#0066cc;'>자동조회: {fetched_p:,.0f}원</span>"
+                else:
+                    price_status = "<span style='color:red; font-weight:bold;'>⚠️ 주가 조회 실패 (직접 입력 필요)</span>"
 
-                c1, c2 = st.columns(2)
+                st.markdown(f"**📌 {label}** &nbsp;|&nbsp; {price_status}", unsafe_allow_html=True)
+
+                c1, c2, c3 = st.columns([1, 1, 1])
+                
                 with c1:
                     qty = st.number_input(
-                        f"{label} 보유수량(주)", 
+                        "보유 수량(주)", 
                         min_value=0, 
                         value=curr_qty, 
                         step=1, 
-                        key=f"reb_qty_{ticker}",
-                        label_visibility="collapsed"
+                        key=f"reb_qty_{ticker}"
                     )
                     reb_holdings[ticker] = qty
+
                 with c2:
+                    # 주가가 0원이면 사용자가 직접 입력 가능하도록 필드 제공
+                    p_input = st.number_input(
+                        "현재 주가(원)", 
+                        min_value=0.0, 
+                        value=float(fetched_p) if fetched_p > 0 else float(st.session_state.get(f"reb_price_{ticker}", 0.0)), 
+                        step=100.0, 
+                        key=f"reb_price_{ticker}"
+                    )
+                    final_prices[ticker] = p_input
+
+                with c3:
                     tw = st.number_input(
-                        f"{label} 목표 비중(%)", 
+                        "목표 비중(%)", 
                         min_value=0.0, 
                         max_value=100.0, 
                         value=def_reb_w, 
                         step=5.0, 
-                        key=f"reb_tw_{ticker}",
-                        label_visibility="collapsed"
+                        key=f"reb_tw_{ticker}"
                     )
                     reb_target_weights[ticker] = tw / 100.0
+
+                # 현재 평가금 및 실시간 비중 표시
+                eval_p = final_prices[ticker]
+                curr_eval = qty * eval_p
+                curr_w_pct = (curr_eval / temp_portfolio_total * 100) if temp_portfolio_total > 0 else 0.0
+                st.caption(f"현재 평가금: **{curr_eval:,.0f}원** (현재 비중: **{curr_w_pct:.1f}%**)")
+                st.divider()
 
         reb_total_w = sum(reb_target_weights.values())
         if abs(reb_total_w - 1.0) > 0.001:
@@ -468,7 +484,7 @@ with tab2:
                     total_eval_asset = 0.0
 
                     for ticker in reb_all_tickers:
-                        price = price_map.get(ticker, 0.0)
+                        price = final_prices.get(ticker, 0.0)
                         qty = reb_holdings[ticker]
                         eval_amt = price * qty
                         total_eval_asset += eval_amt
@@ -506,7 +522,7 @@ with tab2:
 
                         display_df = pd.DataFrame({
                             "종목명": df_reb["label"],
-                            "현재 주가": df_reb["price"].apply(lambda x: f"{x:,.0f}원" if x > 0 else "조회실패"),
+                            "적용 주가": df_reb["price"].apply(lambda x: f"{x:,.0f}원" if x > 0 else "미입력"),
                             "보유 수량": df_reb["qty"].apply(lambda x: f"{x:,}주"),
                             "현재 비중": df_reb["current_weight"].apply(lambda x: f"{x:.1f}%"),
                             "목표 비중": (df_reb["target_weight"] * 100).apply(lambda x: f"{x:.1f}%"),
@@ -524,9 +540,11 @@ with tab2:
                             price = row["price"]
                             amt = abs(row["trade_amt"])
 
-                            if qty > 0:
-                                st.success(f"🟢 **{label}**: **{qty}주 매수** (약 {amt:,.0f}원 / 현재가: {price:,.0f}원)")
+                            if price <= 0:
+                                st.warning(f"⚠️ **{label}**: 주가가 입력되지 않아 주문 수량을 계산할 수 없습니다.")
+                            elif qty > 0:
+                                st.success(f"🟢 **{label}**: **{qty}주 매수** (약 {amt:,.0f}원 / 적용 주가: {price:,.0f}원)")
                             elif qty < 0:
-                                st.error(f"🔴 **{label}**: **{abs(qty)}주 매도** (약 {amt:,.0f}원 / 현재가: {price:,.0f}원)")
+                                st.error(f"🔴 **{label}**: **{abs(qty)}주 매도** (약 {amt:,.0f}원 / 적용 주가: {price:,.0f}원)")
                             else:
                                 st.info(f"⚪ **{label}**: **수량 유지** (현재 목표 비중과 일치)")
