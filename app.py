@@ -134,7 +134,7 @@ BACKFILL_MAP = {
     "489500.KS": "069500.KS", "489510.KS": "069500.KS", "102110.KS": "069500.KS",
     # AI 전력 / 인프라 -> XLU (미국 유틸리티 ETF) 또는 QQQ
     "486330.KS": "XLU", "486340.KS": "XLU", "483210.KS": "QQQ", "486350.KS": "XLU",
-    # AI 광통신/네트워크 -> QQQ
+    # AI 광통신/네트워크 -> QQQ 백필 매핑 추가
     "0173Y0.KS": "QQQ",
 }
 
@@ -151,6 +151,27 @@ def get_latest_price(ticker):
         return 0.0
     except Exception:
         return 0.0
+
+# 여러 종목 최신 주가 일괄 수집
+@st.cache_data(ttl=300)
+def get_batch_latest_prices(tickers):
+    prices = {}
+    if not tickers:
+        return prices
+    try:
+        raw = yf.download(tickers, period="7d", progress=False)['Close']
+        if isinstance(raw, pd.Series):
+            prices[tickers[0]] = float(raw.dropna().iloc[-1]) if not raw.dropna().empty else 0.0
+        else:
+            for t in tickers:
+                if t in raw.columns and not raw[t].dropna().empty:
+                    prices[t] = float(raw[t].dropna().iloc[-1])
+                else:
+                    prices[t] = 0.0
+    except Exception:
+        for t in tickers:
+            prices[t] = get_latest_price(t)
+    return prices
 
 # ---------------------------------------------------------
 # 자동 백필(Backfill) 지원 주가 데이터 수집 함수
@@ -378,7 +399,7 @@ with tab1:
 # =========================================================
 with tab2:
     st.header("현재 비중 계산 & 매매 리밸런싱")
-    st.caption("현재 보유 중인 수량과 예수금, 목표 비중을 입력하면 최신 주가를 반영하여 매수/매도해야 할 정확한 수량을 계산해 줍니다.")
+    st.caption("현재 보유 수량과 예수금을 입력하면 실시간 최신 주가를 불러와 현재 비중(%)과 매매 주문 수량을 자동으로 계산해 줍니다.")
 
     col_left, col_right = st.columns([1, 1])
 
@@ -391,7 +412,10 @@ with tab2:
                 "KIWOOM 미국S&P500모멘텀",
                 "TIGER 미국나스닥100",
                 "ACE 미국S&P500",
-                "TIGER 미국테크TOP10 INDXX"
+                "TIGER 미국테크TOP10 INDXX",
+                "KODEX 미국AI광통신네트워크",
+                "PLUS 고배당주",
+                "ACE 미국배당퀄리티"
             ],
             key="reb_select"
         )
@@ -407,18 +431,57 @@ with tab2:
     reb_target_weights = {}
 
     if reb_all_tickers:
+        # 최신 주가 일괄 로드
+        price_map = get_batch_latest_prices(reb_all_tickers)
+
+        # 1차 평가금 계산 (현재 비중 표출용)
+        temp_eval_total = 0.0
+        # 먼저 세션 상태나 기본값으로 현재 수량 가져와 임시 총자산 계산
+        temp_qtys = {}
+        for ticker in reb_all_tickers:
+            qty_val = st.session_state.get(f"reb_qty_{ticker}", 0)
+            p = price_map.get(ticker, 0.0)
+            temp_eval_total += (qty_val * p)
+            temp_qtys[ticker] = qty_val
+
+        temp_portfolio_total = temp_eval_total + reb_cash
+
         with col_right:
             st.subheader("2️⃣ 보유 수량 및 목표 비중 설정")
             def_reb_w = round(100.0 / len(reb_all_tickers), 1)
 
             for ticker in reb_all_tickers:
                 label = ticker_to_label.get(ticker, ticker)
+                p = price_map.get(ticker, 0.0)
+                
+                # 종목 헤더에 현재 가격 및 실시간 현재 비중 표시
+                curr_qty = temp_qtys.get(ticker, 0)
+                curr_eval = curr_qty * p
+                curr_w_pct = (curr_eval / temp_portfolio_total * 100) if temp_portfolio_total > 0 else 0.0
+                
+                st.markdown(f"**📌 {label}** &nbsp;&nbsp;|&nbsp;&nbsp; <span style='color:#0066cc;'>현재가: **{p:,.0f}원**</span> &nbsp;&nbsp;|&nbsp;&nbsp; <span style='color:#28a745;'>현재 비중: **{curr_w_pct:.1f}%**</span> ({curr_eval:,.0f}원)", unsafe_allow_html=True)
+
                 c1, c2 = st.columns(2)
                 with c1:
-                    qty = st.number_input(f"{label} 보유수량 (주)", min_value=0, value=0, step=1, key=f"reb_qty_{ticker}")
+                    qty = st.number_input(
+                        f"{label} 보유수량(주)", 
+                        min_value=0, 
+                        value=curr_qty, 
+                        step=1, 
+                        key=f"reb_qty_{ticker}",
+                        label_visibility="collapsed"
+                    )
                     reb_holdings[ticker] = qty
                 with c2:
-                    tw = st.number_input(f"{label} 목표 비중 (%)", min_value=0.0, max_value=100.0, value=def_reb_w, step=5.0, key=f"reb_tw_{ticker}")
+                    tw = st.number_input(
+                        f"{label} 목표 비중(%)", 
+                        min_value=0.0, 
+                        max_value=100.0, 
+                        value=def_reb_w, 
+                        step=5.0, 
+                        key=f"reb_tw_{ticker}",
+                        label_visibility="collapsed"
+                    )
                     reb_target_weights[ticker] = tw / 100.0
 
         reb_total_w = sum(reb_target_weights.values())
@@ -429,13 +492,13 @@ with tab2:
             if abs(reb_total_w - 1.0) > 0.001:
                 st.error("목표 비중 합계를 100%로 맞춘 후 계산 버튼을 눌러주세요.")
             else:
-                with st.spinner("최신 주가 수집 및 리밸런싱 주문 수량 계산 중..."):
+                with st.spinner("리밸런싱 주문 수량 계산 중..."):
                     results = []
                     total_eval_asset = 0.0
 
-                    # 1. 최신 주가 및 평가금액 수집
+                    # 1. 최종 주가 및 평가금액 계산
                     for ticker in reb_all_tickers:
-                        price = get_latest_price(ticker)
+                        price = price_map.get(ticker, 0.0)
                         qty = reb_holdings[ticker]
                         eval_amt = price * qty
                         total_eval_asset += eval_amt
